@@ -236,6 +236,26 @@ class DigitRecognizer:
 
         avg_confidence = float(np.mean(confidences)) if confidences else 0.0
 
+        # Over-segmented single digit fallback (e.g. 5 split into 4 and 1, or 2 split into 2 and 1)
+        if numeric_val is not None and numeric_val > max_marks and len(char_tokens) > 1 and max_marks <= 10.0:
+            pts_all = cv2.findNonZero(thresh_inv)
+            if pts_all is not None:
+                ax, ay, aw, ah = cv2.boundingRect(pts_all)
+                full_crop = thresh_inv[ay : ay + ah, ax : ax + aw]
+                s_digit, s_score, s_margin, s_ambig, s_note = self._classify_char_crop(full_crop, aw, ah)
+                try:
+                    s_num = float(s_digit)
+                    if s_num <= max_marks:
+                        value_str = s_digit
+                        numeric_val = s_num
+                        avg_confidence = s_score
+                        char_tokens = [s_digit]
+                        any_char_ambiguous = s_ambig
+                        crops_out = [full_crop]
+                        notes = [f"Consolidated single digit: {s_digit} (prob={s_score:.2f}, {s_note})"]
+                except ValueError:
+                    pass
+
         # Gating rules: flag for teacher review if ambiguous, low confidence, or out of bounds
         is_overall_ambiguous = (
             any_char_ambiguous
@@ -289,8 +309,8 @@ class DigitRecognizer:
             if area < min_area or bh < min_h or bw < min_w:
                 continue
 
-            # Cell line rejection (spans across whole cell horizontally)
-            if bw > (w * 0.92) and bh < (h * 0.25):
+            # Cell line rejection (spans across whole cell horizontally or touches border edges)
+            if (bw > (w * 0.92) and bh < (h * 0.25)) or ((y <= 2 or (y + bh) >= (h - 2)) and bh <= 5 and bw >= 20):
                 continue
 
             # Multi-digit conjoined check (aspect ratio > 1.35)
@@ -305,8 +325,28 @@ class DigitRecognizer:
             else:
                 raw_boxes.append((x, y, bw, bh))
 
+        # Merge vertically overlapping components belonging to the same character
+        # (e.g. top horizontal bar of 5, crossbar of 7, swoop of 2)
+        merged_boxes = []
+        for b in sorted(raw_boxes, key=lambda box: box[0]):
+            if not merged_boxes:
+                merged_boxes.append(b)
+            else:
+                prev = merged_boxes[-1]
+                overlap_x = min(prev[0] + prev[2], b[0] + b[2]) - max(prev[0], b[0])
+                min_w = min(prev[2], b[2])
+                vertically_stacked = (prev[1] + prev[3] <= b[1] + 6) or (b[1] + b[3] <= prev[1] + 6)
+                if vertically_stacked and overlap_x > 0.35 * min_w:
+                    new_x = min(prev[0], b[0])
+                    new_y = min(prev[1], b[1])
+                    new_w = max(prev[0] + prev[2], b[0] + b[2]) - new_x
+                    new_h = max(prev[1] + prev[3], b[1] + b[3]) - new_y
+                    merged_boxes[-1] = (new_x, new_y, new_w, new_h)
+                else:
+                    merged_boxes.append(b)
+
         # Sort bounding boxes left-to-right
-        sorted_boxes = sorted(raw_boxes, key=lambda b: b[0])
+        sorted_boxes = sorted(merged_boxes, key=lambda b: b[0])
         return sorted_boxes, has_dot, is_uncertain
 
     def _attempt_vertical_split(

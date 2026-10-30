@@ -51,7 +51,7 @@ class EvalSheetExtractor:
         },
     }
 
-    # 10 Questions and Total rows
+    # 10 Questions and Total rows (Legacy Marks Evaluation Sheet)
     ROWS = [
         ("1a", "Q1 (a)", 235),
         ("1b", "Q1 (b)", 307),
@@ -65,6 +65,30 @@ class EvalSheetExtractor:
         ("total", "Total", 872),
     ]
 
+    # 13 Rows for VTU/Engineering College 'DISTRIBUTION OF MARKS' template
+    DOM_ROWS = [
+        ("1a", "1. a", 96, 141),
+        ("1b", "1. b", 141, 189),
+        ("1c", "1. c", 189, 236),
+        ("2a", "2. a", 236, 283),
+        ("2b", "2. b", 283, 331),
+        ("2c", "2. c", 331, 378),
+        ("3a", "3. a", 378, 425),
+        ("3b", "3. b", 425, 472),
+        ("3c", "3. c", 472, 520),
+        ("4a", "4. a", 520, 567),
+        ("4b", "4. b", 567, 614),
+        ("4c", "4. c", 614, 662),
+        ("total", "Total Marks", 662, 709),
+    ]
+
+    # Columns configuration for 'DISTRIBUTION OF MARKS' (600x780 rectified resolution)
+    DOM_COLUMNS = {
+        "IA 1": {"col_range": (0, 200), "marks_x": (95, 199)},
+        "IA 2": {"col_range": (199, 400), "marks_x": (294, 399)},
+        "IA 3": {"col_range": (399, 600), "marks_x": (495, 599)},
+    }
+
     def __init__(self, recognizer: Optional[DigitRecognizer] = None):
         self.recognizer = recognizer or DigitRecognizer()
 
@@ -77,6 +101,186 @@ class EvalSheetExtractor:
             return ""
         b64 = base64.b64encode(buf).decode("utf-8")
         return f"data:image/png;base64,{b64}"
+
+    @staticmethod
+    def _order_points(pts: np.ndarray) -> np.ndarray:
+        """Order 4 polygon points as top-left, top-right, bottom-right, bottom-left."""
+        rect = np.zeros((4, 2), dtype="float32")
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]
+        rect[2] = pts[np.argmax(s)]
+        diff = np.diff(pts, axis=1)
+        rect[1] = pts[np.argmin(diff)]
+        rect[3] = pts[np.argmax(diff)]
+        return rect
+
+    def _detect_distribution_of_marks(self, img_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Detect and rectify VTU/College 'DISTRIBUTION OF MARKS' grid table."""
+        h, w = img_bgr.shape[:2]
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 4)
+        cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if area > (w * h * 0.35):
+                bx, by, bw, bh = cv2.boundingRect(c)
+                if bw / float(w) >= 0.65 and bh / float(h) >= 0.55:
+                    peri = cv2.arcLength(c, True)
+                    approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+                    if len(approx) == 4:
+                        pts = self._order_points(approx.reshape(4, 2).astype("float32"))
+                        dest_w, dest_h = 600, 780
+                        dst = np.array([
+                            [0, 0],
+                            [dest_w - 1, 0],
+                            [dest_w - 1, dest_h - 1],
+                            [0, dest_h - 1]
+                        ], dtype="float32")
+                        m = cv2.getPerspectiveTransform(pts, dst)
+                        warped = cv2.warpPerspective(img_bgr, m, (dest_w, dest_h))
+                        return warped
+
+        return None
+
+    def _extract_distribution_of_marks(
+        self,
+        warped_table: np.ndarray,
+        target_ia: str,
+        selected_ias: List[str],
+    ) -> Dict[str, Any]:
+        """Extract marks from rectified 'DISTRIBUTION OF MARKS' grid table."""
+        if len(selected_ias) == 1:
+            col_x1, col_x2 = self.DOM_COLUMNS[selected_ias[0]]["col_range"]
+            overview_crop = warped_table[0:715, col_x1:col_x2]
+        else:
+            overview_crop = warped_table[0:715, 0:600]
+        overview_b64 = self._encode_base64(overview_crop)
+
+        results_by_ia: Dict[str, List[Dict[str, Any]]] = {}
+        kernel_2x2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+
+        for ia_name in selected_ias:
+            x1, x2 = self.DOM_COLUMNS[ia_name]["marks_x"]
+            ia_marks: List[Dict[str, Any]] = []
+
+            for q_id, q_lbl, y1, y2 in self.DOM_ROWS:
+                cell = warped_table[y1 + 5 : y2 - 5, x1 + 6 : x2 - 6]
+                cgray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
+
+                if cgray.std() < 5.0 or (int(cgray.max()) - int(cgray.min())) < 22:
+                    ia_marks.append({
+                        "id": q_id,
+                        "label": q_lbl,
+                        "detected_str": "-",
+                        "numeric_val": 0.0,
+                        "verified_val": 0.0,
+                        "confidence": 1.0,
+                        "status": "Blank",
+                        "is_blank": True,
+                        "crop_base64": self._encode_base64(cell),
+                    })
+                    continue
+
+                _, bw = cv2.threshold(cgray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                bw[:2, :] = 0
+                bw[-2:, :] = 0
+                bw[:, :2] = 0
+                bw[:, -2:] = 0
+
+                pts = cv2.findNonZero(bw)
+                if pts is None or cv2.countNonZero(bw) < 18:
+                    ia_marks.append({
+                        "id": q_id,
+                        "label": q_lbl,
+                        "detected_str": "-",
+                        "numeric_val": 0.0,
+                        "verified_val": 0.0,
+                        "confidence": 1.0,
+                        "status": "Blank",
+                        "is_blank": True,
+                        "crop_base64": self._encode_base64(cell),
+                    })
+                    continue
+
+                rx, ry, rw, rh = cv2.boundingRect(pts)
+                if (rh <= 12 and rw >= 18) or (rw > cell.shape[1] * 0.42 and rh < 15):
+                    ia_marks.append({
+                        "id": q_id,
+                        "label": q_lbl,
+                        "detected_str": "-",
+                        "numeric_val": 0.0,
+                        "verified_val": 0.0,
+                        "confidence": 0.95,
+                        "status": "Valid",
+                        "is_blank": False,
+                        "crop_base64": self._encode_base64(cell),
+                    })
+                    continue
+
+                max_m = 50.0 if q_id == "total" else 10.0
+                bw_dilated = cv2.dilate(bw, kernel_2x2)
+                res = self.recognizer.recognize_region(bw_dilated, max_marks=max_m, allow_decimal=False)
+
+                if res.value_str is None or res.value_str == "-":
+                    det_str = "-"
+                    num_val = 0.0
+                    status_text = "Valid"
+                else:
+                    det_str = res.value_str
+                    num_val = res.numeric_value if res.numeric_value is not None else 0.0
+                    status_text = "Valid" if res.confidence >= 0.65 and not res.is_ambiguous else "Needs review"
+
+                ia_marks.append({
+                    "id": q_id,
+                    "label": q_lbl,
+                    "detected_str": det_str,
+                    "numeric_val": num_val,
+                    "verified_val": num_val,
+                    "confidence": round(res.confidence, 3),
+                    "status": status_text,
+                    "is_blank": False,
+                    "crop_base64": self._encode_base64(cell),
+                })
+
+            results_by_ia[ia_name] = ia_marks
+
+        summary_totals = {}
+        for ia_name, marks in results_by_ia.items():
+            calc_sum = sum(
+                m["verified_val"] for m in marks
+                if m["id"] != "total" and m["verified_val"] is not None and not m["is_blank"]
+            )
+            detected_tot_mark = next((m for m in marks if m["id"] == "total"), None)
+            detected_val = detected_tot_mark["numeric_val"] if detected_tot_mark else None
+
+            summary_totals[ia_name] = {
+                "calculated_sum": round(calc_sum, 1),
+                "detected_total": detected_val,
+                "matches": detected_val is not None and abs(calc_sum - detected_val) < 0.01,
+            }
+
+        return {
+            "template_type": "DISTRIBUTION_OF_MARKS",
+            "column_crop_base64": overview_b64,
+            "target_ia": target_ia,
+            "selected_ias": selected_ias,
+            "results_by_ia": results_by_ia,
+            "summary_totals": summary_totals,
+            "total_sheets": 1,
+            "sheets": [{
+                "sheet_index": 1,
+                "page_number": 1,
+                "sheet_label": "Sheet 1 (Page 1)",
+                "template_type": "DISTRIBUTION_OF_MARKS",
+                "column_crop_base64": overview_b64,
+                "target_ia": target_ia,
+                "selected_ias": selected_ias,
+                "results_by_ia": results_by_ia,
+                "summary_totals": summary_totals,
+            }],
+        }
 
     def _detect_printed_boxes(self, img_bgr: np.ndarray) -> Optional[Dict[str, List[Tuple[int, int, int, int]]]]:
         """Detect printed marks square boxes across IA columns on camera photos and scans."""
@@ -214,6 +418,11 @@ class EvalSheetExtractor:
                     ia_key = k
                     break
             selected_ias = [ia_key]
+
+        # 0. Attempt VTU / Bluebook 'DISTRIBUTION OF MARKS' detection
+        warped_dom = self._detect_distribution_of_marks(img_bgr)
+        if warped_dom is not None:
+            return self._extract_distribution_of_marks(warped_dom, target_ia, selected_ias)
 
         # 1. Attempt adaptive printed box detection directly on image
         detected_boxes = self._detect_printed_boxes(img_bgr)
@@ -406,6 +615,7 @@ class EvalSheetExtractor:
             }
 
         sheet_payload = {
+            "template_type": "MARKS_EVALUATION_SHEET",
             "column_crop_base64": overview_b64,
             "target_ia": target_ia,
             "selected_ias": selected_ias,
@@ -419,6 +629,7 @@ class EvalSheetExtractor:
             "sheet_index": 1,
             "page_number": 1,
             "sheet_label": "Sheet 1 (Page 1)",
+            "template_type": "MARKS_EVALUATION_SHEET",
             "column_crop_base64": overview_b64,
             "target_ia": target_ia,
             "selected_ias": selected_ias,
@@ -455,6 +666,7 @@ class EvalSheetExtractor:
                 "sheet_index": page_idx,
                 "page_number": page_idx,
                 "sheet_label": f"Sheet {page_idx} (Page {page_idx})",
+                "template_type": sheet_res.get("template_type", "MARKS_EVALUATION_SHEET"),
                 "column_crop_base64": sheet_res["column_crop_base64"],
                 "target_ia": sheet_res["target_ia"],
                 "selected_ias": sheet_res["selected_ias"],
@@ -465,6 +677,7 @@ class EvalSheetExtractor:
         first = sheets[0]
         return {
             "total_sheets": len(sheets),
+            "template_type": first.get("template_type", "MARKS_EVALUATION_SHEET"),
             "target_ia": first["target_ia"],
             "selected_ias": first["selected_ias"],
             "column_crop_base64": first["column_crop_base64"],
@@ -504,27 +717,18 @@ class EvalSheetExtractor:
         if not sheets:
             sheets = []
 
-        q_cols = [
-            ("1a", "1a"),
-            ("1b", "1b"),
-            ("2a", "2a"),
-            ("2b", "2b"),
-            ("3a", "3a"),
-            ("3b", "3b"),
-            ("3b_alt", "3b-alt"),
-            ("4a", "4a"),
-            ("4b", "4b"),
-        ]
+        q_cols = self._get_question_columns(sheets)
 
         # Sheet 1: Marks Summary Matrix
-        ws.merge_cells("A1:M1")
+        last_col_letter = openpyxl.utils.get_column_letter(len(q_cols) + 4)
+        ws.merge_cells(f"A1:{last_col_letter}1")
         ws["A1"] = "INTERNAL ASSESSMENT EVALUATION MARKS MATRIX"
         ws["A1"].font = title_font
         ws["A1"].alignment = left_align
         ws.row_dimensions[1].height = 28
 
         headers = ["Sheet / Page", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
-        col_widths = [18, 14, 8, 8, 8, 8, 8, 8, 10, 8, 8, 10, 16]
+        col_widths = [18, 14] + [8] * len(q_cols) + [10, 16]
 
         ws.append([])
         ws.append(headers)
@@ -561,7 +765,7 @@ class EvalSheetExtractor:
 
                 for col_idx in range(1, len(row_vals) + 1):
                     cell = ws.cell(row=current_row, column=col_idx)
-                    cell.font = bold_font if col_idx == 12 else regular_font
+                    cell.font = bold_font if col_idx == len(row_vals) - 1 else regular_font
                     cell.border = thin_border
                     cell.alignment = left_align if col_idx == 1 else center_align
 
@@ -715,6 +919,38 @@ class EvalSheetExtractor:
         det = str(m.get("detected_str", "")).strip()
         return "-" if det in ("", "-") else det
 
+    @classmethod
+    def _get_question_columns(cls, sheets: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
+        """Dynamically detect question columns based on whether sheets contain 12-question (VTU) or 10-question layout."""
+        for s in sheets:
+            for ia_name, marks in s.get("results_by_ia", {}).items():
+                if any(m.get("id") in ("1c", "2c", "3c", "4c") for m in marks):
+                    return [
+                        ("1a", "1.a"),
+                        ("1b", "1.b"),
+                        ("1c", "1.c"),
+                        ("2a", "2.a"),
+                        ("2b", "2.b"),
+                        ("2c", "2.c"),
+                        ("3a", "3.a"),
+                        ("3b", "3.b"),
+                        ("3c", "3.c"),
+                        ("4a", "4.a"),
+                        ("4b", "4.b"),
+                        ("4c", "4.c"),
+                    ]
+        return [
+            ("1a", "1a"),
+            ("1b", "1b"),
+            ("2a", "2a"),
+            ("2b", "2b"),
+            ("3a", "3a"),
+            ("3b", "3b"),
+            ("3b_alt", "3b-alt"),
+            ("4a", "4a"),
+            ("4b", "4b"),
+        ]
+
     def generate_csv_string(self, extraction_data: Dict[str, Any]) -> str:
         """Create formatted gradebook matrix CSV string from extraction results."""
         out = io.StringIO()
@@ -731,17 +967,7 @@ class EvalSheetExtractor:
         if not sheets:
             sheets = []
 
-        q_cols = [
-            ("1a", "1a"),
-            ("1b", "1b"),
-            ("2a", "2a"),
-            ("2b", "2b"),
-            ("3a", "3a"),
-            ("3b", "3b"),
-            ("3b_alt", "3b-alt"),
-            ("4a", "4a"),
-            ("4b", "4b"),
-        ]
+        q_cols = self._get_question_columns(sheets)
 
         headers = ["Sheet", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
         writer.writerow(headers)

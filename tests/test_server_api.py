@@ -267,3 +267,59 @@ def test_extract_user_multipage_photo_pdf_all_ia(client):
         assert f"Sheet {s_idx}" in wb.sheetnames
 
 
+def test_extract_distribution_of_marks_template(client):
+    """Test extracting from Indian VTU/College 'DISTRIBUTION OF MARKS' bluebook template."""
+    sample_path = BASE_DIR / "sample_data" / "distribution_marks_sample_2.jpg"
+    if not sample_path.exists():
+        pytest.skip("distribution_marks_sample_2.jpg not found")
+
+    with open(sample_path, "rb") as f:
+        img_bytes = f.read()
+
+    resp = client.post(
+        "/api/extract-sheet",
+        files={"file": ("distribution_marks_sample_2.jpg", img_bytes, "image/jpeg")},
+        data={"target_ia": "ALL", "use_demo": "false"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data.get("template_type") == "DISTRIBUTION_OF_MARKS"
+    assert "IA 1" in data["results_by_ia"]
+    assert "IA 2" in data["results_by_ia"]
+    assert "IA 3" in data["results_by_ia"]
+
+    # Each IA has 13 rows (1a-4c + total)
+    ia1_marks = data["results_by_ia"]["IA 1"]
+    assert len(ia1_marks) == 13
+    assert [m["id"] for m in ia1_marks] == [
+        "1a", "1b", "1c", "2a", "2b", "2c", "3a", "3b", "3c", "4a", "4b", "4c", "total"
+    ]
+
+    # Verify detected digits
+    ia1_map = {m["id"]: m for m in ia1_marks}
+    assert ia1_map["1a"]["numeric_val"] == 6.0
+    assert ia1_map["1b"]["numeric_val"] == 4.0
+    assert ia1_map["total"]["numeric_val"] == 24.0
+
+    # Verify CSV export with 12 questions
+    csv_resp = client.post(
+        "/api/export-sheet",
+        json={"format": "csv", "data": data},
+    )
+    assert csv_resp.status_code == 200
+    assert "Sheet,Assessment,1.a,1.b,1.c,2.a,2.b,2.c,3.a,3.b,3.c,4.a,4.b,4.c,Total,Status" in csv_resp.text
+
+    # Verify XLSX export
+    xlsx_resp = client.post(
+        "/api/export-sheet",
+        json={"format": "xlsx", "data": data},
+    )
+    assert xlsx_resp.status_code == 200
+    import io
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_resp.content))
+    assert "IA Marks Summary" in wb.sheetnames
+
+
+
