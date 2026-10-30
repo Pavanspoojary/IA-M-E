@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IA Bluebook Marks Extraction System</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-group">
+        <h1>IA Bluebook Marks Extraction System</h1>
+        <p>Continuous Internal Assessment evaluation sheet digitization and export engine</p>
+      </div>
+    </header>
+
+    <!-- Step 1: Ingestion Zone with 3 Options -->
+    <section class="card" id="uploadCard">
+      <h2>1. Input Evaluation Sheet</h2>
+      <p class="card-desc">Provide your college marks evaluation sheet using camera capture, file upload, or drag-and-drop.</p>
+
+      <div class="dropzone" id="dropzone">
+        <div class="dropzone-title">Drag &amp; drop evaluation sheet here</div>
+        <div class="dropzone-sub">Supports JPG, PNG, and PDF documents</div>
+
+        <div class="option-buttons-row">
+          <button type="button" class="btn-primary" id="btnCamera">Take Photo (Phone)</button>
+          <button type="button" class="btn-primary" id="btnBrowse">Upload File</button>
+        </div>
+
+        <!-- Hidden Native File Inputs -->
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display: none;">
+        <input type="file" id="fileInput" accept="image/*,.pdf" style="display: none;">
+      </div>
+
+      <!-- File Loaded Notification Banner -->
+      <div id="fileBanner" class="file-banner" style="display: none;">
+        <div class="file-banner-info" id="fileBannerText">Document loaded</div>
+        <button type="button" class="btn-outline" id="btnChangeFile" style="padding: 4px 10px; font-size: 0.8rem;">Change Document</button>
+      </div>
+    </section>
+
+    <!-- Step 2: Select IA Assessment -->
+    <section class="card" id="iaSelectCard" style="display: none;">
+      <h2>2. Select Assessment to Fetch</h2>
+      <p class="card-desc">Choose which IA column OpenCV will crop from the evaluation sheet and digitize:</p>
+
+      <div class="ia-selector-group">
+        <button type="button" class="ia-btn active" data-ia="IA 1">IA 1</button>
+        <button type="button" class="ia-btn" data-ia="IA 2">IA 2</button>
+        <button type="button" class="ia-btn" data-ia="IA 3">IA 3</button>
+        <button type="button" class="ia-btn" data-ia="ALL">All IA</button>
+      </div>
+
+      <div style="display: flex; justify-content: center; margin-top: 12px;">
+        <button type="button" class="btn-success" id="btnFetchMarks" style="padding: 12px 28px; font-size: 1rem;">Fetch Marks &amp; Crop Column</button>
+      </div>
+
+      <div id="progressBox" class="progress-box">Cropping column and recognizing handwritten marks...</div>
+    </section>
+
+    <!-- Step 3: Extracted Results & Verification -->
+    <section class="card" id="resultsCard" style="display: none;">
+      <h2>3. Extracted Marks &amp; Column Verification</h2>
+
+      <!-- Sheet Navigation Bar (Multi-sheet PDF) -->
+      <div id="sheetNavBar" class="sheet-nav-bar" style="display: none;">
+        <button type="button" class="btn-outline" id="btnPrevSheet">&lt; Previous Sheet</button>
+        <div class="sheet-indicator">
+          <span>Active Sheet:</span>
+          <select id="sheetSelectDropdown" class="sheet-select-dropdown" aria-label="Select sheet"></select>
+          <span id="sheetCountIndicator" class="sheet-count-indicator">Sheet 1 of 1</span>
+        </div>
+        <button type="button" class="btn-outline" id="btnNextSheet">Next Sheet &gt;</button>
+      </div>
+
+      <div class="results-grid">
+        <!-- Left: Cropped Column View -->
+        <div class="crop-preview-card">
+          <h3 id="cropColumnTitle">Cropped Column</h3>
+          <img id="columnCropImg" class="column-crop-img" alt="Cropped IA Column">
+        </div>
+
+        <!-- Right: Extracted Marks Table & Live Totals -->
+        <div>
+          <!-- Live Score Summary Bar -->
+          <div class="score-summary-bar">
+            <div class="score-item">
+              <span class="score-lbl">Calculated Score</span>
+              <span class="score-val" id="displayCalculatedTotal">0.0</span>
+            </div>
+            <div class="score-item">
+              <span class="score-lbl">Sheet Detected Total</span>
+              <span class="score-val" id="displayDetectedTotal">-</span>
+            </div>
+            <div>
+              <span id="matchBadge" class="score-badge">Verified Match</span>
+            </div>
+          </div>
+
+          <!-- Question Table -->
+          <table class="marks-table">
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>Handwriting Snippet</th>
+                <th>Detected</th>
+                <th>Status</th>
+                <th>Verified Mark</th>
+              </tr>
+            </thead>
+            <tbody id="evalTableBody"></tbody>
+          </table>
+
+          <!-- Step 4: Download Controls -->
+          <div class="action-row">
+            <button type="button" class="btn-primary" id="btnDownloadXlsx">Download Excel (.xlsx)</button>
+            <button type="button" class="btn-outline" id="btnDownloadCsv">Download CSV (.csv)</button>
+            <button type="button" class="btn-secondary" id="btnNewExtraction">New Extraction</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

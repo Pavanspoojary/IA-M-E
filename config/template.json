@@ -1,0 +1,149 @@
+{
+    "template_name": "Standard College IA Bluebook Sheet 2",
+    "description": "Standard 8-Question Internal Assessment Marks Grid with Student ID and Part A/B sections",
+    "college_name": "Engineering College Examination Cell",
+    "reference_width": 1240,
+    "reference_height": 1754,
+    "student_id_region": {
+        "x": 750,
+        "y": 280,
+        "w": 350,
+        "h": 70,
+        "normalized_bbox": [
+            0.60484,
+            0.15963,
+            0.28226,
+            0.03991
+        ]
+    },
+    "questions": [
+        {
+            "id": "q1",
+            "label": "Q1 (a)",
+            "max_marks": 5.0,
+            "step": 0.5,
+            "x": 420,
+            "y": 520,
+            "w": 130,
+            "h": 65,
+            "normalized_bbox": [
+                0.33871,
+                0.29647,
+                0.10484,
+                0.03706
+            ]
+        },
+        {
+            "id": "q2",
+            "label": "Q2 (b)",
+            "max_marks": 5.0,
+            "step": 0.5,
+            "x": 420,
+            "y": 630,
+            "w": 130,
+            "h": 65,
+            "normalized_bbox": [
+                0.33871,
+                0.35918,
+                0.10484,
+                0.03706
+            ]
+        },
+        {
+            "id": "q3",
+            "label": "Q3 (a)",
+            "max_marks": 5.0,
+            "step": 0.5,
+            "x": 420,
+            "y": 740,
+            "w": 130,
+            "h": 65,
+            "normalized_bbox": [
+                0.33871,
+                0.42189,
+                0.10484,
+                0.03706
+            ]
+        },
+        {
+            "id": "q4",
+            "label": "Q4 (b)",
+            "max_marks": 5.0,
+            "step": 0.5,
+            "x": 420,
+            "y": 850,
+            "w": 130,
+            "h": 65,
+            "normalized_bbox": [
+                0.33871,
+                0.48461,
+                0.10484,
+                0.03706
+            ]
+        },
+        {
+            "id": "q5",
+            "label": "Q5",
+            "max_marks": 10.0,
+            "step": 0.5,
+            "x": 940,
+            "y": 520,
+            "w": 130,
+            "h": 65,
+            "normalized_bbox": [
+                0.75806,
+                0.29647,
+                0.10484,
+                0.03706
+            ]
+        },
+        {
+            "id": "q6",
+            "label": "Q6",
+            "max_marks": 10.0,
+            "step": 0.5,
+            "x": 940,
+            "y": 630,
+            "w": 130,
+            "h": 65,
+            "normalized_bbox": [
+                0.75806,
+                0.35918,
+                0.10484,
+                0.03706
+            ]
+        },
+        {
+            "id": "q7",
+            "label": "Q7",
+            "max_marks": 10.0,
+            "step": 0.5,
+            "x": 940,
+            "y": 740,
+            "w": 130,
+            "h": 65,
+            "normalized_bbox": [
+                0.75806,
+                0.42189,
+                0.10484,
+                0.03706
+            ]
+        },
+        {
+            "id": "q8",
+            "label": "Q8",
+            "max_marks": 10.0,
+            "step": 0.5,
+            "x": 940,
+            "y": 850,
+            "w": 130,
+            "h": 65,
+            "normalized_bbox": [
+                0.75806,
+                0.48461,
+                0.10484,
+                0.03706
+            ]
+        }
+    ]
+}
