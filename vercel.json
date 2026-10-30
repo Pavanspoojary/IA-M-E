@@ -1,10 +1,11 @@
 {
   "version": 2,
-  "outputDirectory": "web",
-  "cleanUrls": true,
   "rewrites": [
-    { "source": "/static/(.*)", "destination": "/$1" },
-    { "source": "/models/(.*)", "destination": "/models/$1" },
-    { "source": "/sample_data/(.*)", "destination": "/sample_data/$1" }
+    { "source": "/models/(.*)", "destination": "/web/models/$1" },
+    { "source": "/sample_data/(.*)", "destination": "/web/sample_data/$1" },
+    { "source": "/static/(.*)", "destination": "/web/$1" },
+    { "source": "/(.*\\.(js|css|png|jpg|jpeg|gif|ico|svg|onnx|wasm|json))", "destination": "/web/$1" },
+    { "source": "/api/(.*)", "destination": "/api/index.py" },
+    { "source": "/(.*)", "destination": "/api/index.py" }
   ]
 }
