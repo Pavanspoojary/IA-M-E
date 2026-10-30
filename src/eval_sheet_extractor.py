@@ -167,9 +167,26 @@ class EvalSheetExtractor:
 
             for q_id, q_lbl, y1, y2 in self.DOM_ROWS:
                 cell = warped_table[y1 + 5 : y2 - 5, x1 + 6 : x2 - 6]
-                cgray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
 
-                if cgray.std() < 5.0 or (int(cgray.max()) - int(cgray.min())) < 22:
+                # 1. Red ink isolation (eliminates black printed borders)
+                b, g, red = cv2.split(cell)
+                diff = red.astype(int) - np.maximum(b, g).astype(int)
+                red_mask = (diff > 16).astype(np.uint8) * 255
+                red_mask[:2, :] = 0; red_mask[-2:, :] = 0; red_mask[:, :2] = 0; red_mask[:, -2:] = 0
+                red_cnt = cv2.countNonZero(red_mask)
+
+                # 2. Dark ink fallback with border shave
+                cgray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
+                shaved_gray = cgray[4:-4, 4:-4]
+                _, dark_thresh = cv2.threshold(shaved_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                dark_cnt = cv2.countNonZero(dark_thresh)
+
+                if red_cnt >= 20:
+                    bw = red_mask
+                elif dark_cnt >= 25 and shaved_gray.std() > 6.0:
+                    bw = np.zeros_like(cgray)
+                    bw[4:-4, 4:-4] = dark_thresh
+                else:
                     ia_marks.append({
                         "id": q_id,
                         "label": q_lbl,
@@ -182,12 +199,6 @@ class EvalSheetExtractor:
                         "crop_base64": self._encode_base64(cell),
                     })
                     continue
-
-                _, bw = cv2.threshold(cgray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                bw[:2, :] = 0
-                bw[-2:, :] = 0
-                bw[:, :2] = 0
-                bw[:, -2:] = 0
 
                 pts = cv2.findNonZero(bw)
                 if pts is None or cv2.countNonZero(bw) < 18:
@@ -205,7 +216,9 @@ class EvalSheetExtractor:
                     continue
 
                 rx, ry, rw, rh = cv2.boundingRect(pts)
-                if (rh <= 12 and rw >= 18) or (rw > cell.shape[1] * 0.42 and rh < 15):
+                ratio = rw / float(max(1, rh))
+                # Unattempted strikeout dash detection
+                if (ratio >= 2.5) or (rh <= 12 and rw >= 18) or (rw > cell.shape[1] * 0.35 and rh <= 14):
                     ia_marks.append({
                         "id": q_id,
                         "label": q_lbl,

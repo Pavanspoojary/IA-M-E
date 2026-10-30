@@ -183,7 +183,7 @@ class DigitRecognizer:
             )
 
         # 2. Segment connected components and contours
-        digit_boxes, has_dot, is_segmentation_uncertain = self._segment_digits(thresh_inv)
+        digit_boxes, has_dot, is_segmentation_uncertain = self._segment_digits(thresh_inv, allow_decimal=allow_decimal)
 
         if not digit_boxes:
             return DigitRecognitionResult(
@@ -236,25 +236,26 @@ class DigitRecognizer:
 
         avg_confidence = float(np.mean(confidences)) if confidences else 0.0
 
-        # Over-segmented single digit fallback (e.g. 5 split into 4 and 1, or 2 split into 2 and 1)
+        # Over-segmented single digit fallback (only if total bounding box is narrow like a single digit: aspect < 0.95)
         if numeric_val is not None and numeric_val > max_marks and len(char_tokens) > 1 and max_marks <= 10.0:
             pts_all = cv2.findNonZero(thresh_inv)
             if pts_all is not None:
                 ax, ay, aw, ah = cv2.boundingRect(pts_all)
-                full_crop = thresh_inv[ay : ay + ah, ax : ax + aw]
-                s_digit, s_score, s_margin, s_ambig, s_note = self._classify_char_crop(full_crop, aw, ah)
-                try:
-                    s_num = float(s_digit)
-                    if s_num <= max_marks:
-                        value_str = s_digit
-                        numeric_val = s_num
-                        avg_confidence = s_score
-                        char_tokens = [s_digit]
-                        any_char_ambiguous = s_ambig
-                        crops_out = [full_crop]
-                        notes = [f"Consolidated single digit: {s_digit} (prob={s_score:.2f}, {s_note})"]
-                except ValueError:
-                    pass
+                if aw / float(max(1, ah)) < 0.95:
+                    full_crop = thresh_inv[ay : ay + ah, ax : ax + aw]
+                    s_digit, s_score, s_margin, s_ambig, s_note = self._classify_char_crop(full_crop, aw, ah)
+                    try:
+                        s_num = float(s_digit)
+                        if s_num <= max_marks:
+                            value_str = s_digit
+                            numeric_val = s_num
+                            avg_confidence = s_score
+                            char_tokens = [s_digit]
+                            any_char_ambiguous = s_ambig
+                            crops_out = [full_crop]
+                            notes = [f"Consolidated single digit: {s_digit} (prob={s_score:.2f}, {s_note})"]
+                    except ValueError:
+                        pass
 
         # Gating rules: flag for teacher review if ambiguous, low confidence, or out of bounds
         is_overall_ambiguous = (
@@ -283,14 +284,15 @@ class DigitRecognizer:
     def _segment_digits(
         self,
         thresh_inv: np.ndarray,
+        allow_decimal: bool = True,
     ) -> Tuple[List[Tuple[int, int, int, int]], bool, bool]:
         """Segment connected components into ordered bounding boxes from left to right."""
         h, w = thresh_inv.shape[:2]
         contours, hierarchy = cv2.findContours(thresh_inv, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        min_area = 20
-        min_h = max(8, int(h * 0.18))
-        min_w = 4
+        min_area = 15
+        min_h = max(6, int(h * 0.15))
+        min_w = 3
 
         raw_boxes = []
         has_dot = False
@@ -300,8 +302,8 @@ class DigitRecognizer:
             area = cv2.contourArea(cnt)
             x, y, bw, bh = cv2.boundingRect(cnt)
 
-            # Decimal dot detection: small low-positioned component
-            if area >= 8 and bw <= 12 and bh <= 12 and (y + bh) > (h * 0.55):
+            # Decimal dot detection: small low-positioned component (only when allow_decimal is True)
+            if allow_decimal and area >= 6 and area <= 30 and bw <= 8 and bh <= 8 and (y + bh) > (h * 0.55):
                 has_dot = True
                 continue
 
@@ -335,8 +337,8 @@ class DigitRecognizer:
                 prev = merged_boxes[-1]
                 overlap_x = min(prev[0] + prev[2], b[0] + b[2]) - max(prev[0], b[0])
                 min_w = min(prev[2], b[2])
-                vertically_stacked = (prev[1] + prev[3] <= b[1] + 6) or (b[1] + b[3] <= prev[1] + 6)
-                if vertically_stacked and overlap_x > 0.35 * min_w:
+                vertically_stacked = (prev[1] + prev[3] <= b[1] + 8) or (b[1] + b[3] <= prev[1] + 8)
+                if vertically_stacked and overlap_x > 0.25 * min_w:
                     new_x = min(prev[0], b[0])
                     new_y = min(prev[1], b[1])
                     new_w = max(prev[0] + prev[2], b[0] + b[2]) - new_x
