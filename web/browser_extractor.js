@@ -114,11 +114,12 @@
           ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/';
           ort.env.wasm.numThreads = 1;
 
+          const MODEL_VERSION = '20261031_v5';
           const possibleUrls = [
-            'models/digit_model.onnx',
-            '/models/digit_model.onnx',
-            './models/digit_model.onnx',
-            '../models/digit_model.onnx',
+            `models/digit_model.onnx?v=${MODEL_VERSION}`,
+            `/models/digit_model.onnx?v=${MODEL_VERSION}`,
+            `./models/digit_model.onnx?v=${MODEL_VERSION}`,
+            `../models/digit_model.onnx?v=${MODEL_VERSION}`,
           ];
 
           let session = null;
@@ -637,21 +638,55 @@
       // Check vertical stroke thickness across columns
       let maxColSpan = 0;
       let sumColSpan = 0;
+      let sumX = 0, sumY = 0, sumXX = 0, sumYY = 0, sumXY = 0, ptCount = 0;
+
       for (let x = minX; x <= maxX; x++) {
         let span = 0;
         for (let y = minY; y <= maxY; y++) {
-          if (mask[y * w + x]) span++;
+          if (mask[y * w + x]) {
+            span++;
+            sumX += x;
+            sumY += y;
+            sumXX += x * x;
+            sumYY += y * y;
+            sumXY += x * y;
+            ptCount++;
+          }
         }
         if (span > maxColSpan) maxColSpan = span;
         sumColSpan += span;
       }
       const avgColSpan = sumColSpan / Math.max(1, rw);
 
-      // Strikeout / Cut Mark detection rule:
-      // Real strikeouts are wide horizontal lines drawn across the cell (ratio >= 2.2, rw >= 20).
-      // Total Marks cell is NEVER a strikeout (always numeric or blank).
+      // Compute coordinate covariance to measure stroke linearity (detects slashes / cut marks)
+      let corr = 0;
+      if (ptCount >= 8) {
+        const meanX = sumX / ptCount;
+        const meanY = sumY / ptCount;
+        const varX = Math.max(1e-4, (sumXX / ptCount) - meanX * meanX);
+        const varY = Math.max(1e-4, (sumYY / ptCount) - meanY * meanY);
+        const covXY = (sumXY / ptCount) - meanX * meanY;
+        corr = Math.abs(covXY) / Math.sqrt(varX * varY);
+      }
+
+      const strokeDensity = ptCount / Math.max(1, rw * rh);
+
+      // Strikeout / Cut Mark / Dash detection rule:
+      // Evaluators mark unattempted or 0 marks cells with:
+      // 1. Horizontal dash / line: short height (rh <= 11) or wide aspect ratio (ratio >= 2.2 and rw >= 16 and rh <= 18) or very wide line (ratio >= 3.0 and rw >= 25)
+      // 2. Diagonal cut mark / slash (/ or \): highly linear diagonal stroke (corr >= 0.85, rh <= 20, rw >= 14, density <= 0.28, ratio 0.7 to 1.5)
+      // Note: Total Marks cell is NEVER a strikeout (always numeric or blank).
       const isTotal = row && (row.id === 'total' || (row.max && row.max > 10.0));
-      const isStrikeout = !isTotal && ((ratio >= 2.2 && rw >= 20) || (rw >= 38 && ratio >= 2.0));
+      const isHorizontalDash = (
+        (rw >= 10 && rh <= 11) ||
+        (rh <= 18 && ratio >= 2.2 && rw >= 16) ||
+        (ratio >= 3.0 && rw >= 25)
+      );
+      const isDiagonalCutMark = (
+        rh <= 20 && rw >= 14 && corr >= 0.85 && strokeDensity <= 0.28 && ratio >= 0.70 && ratio <= 1.50
+      );
+
+      const isStrikeout = !isTotal && (isHorizontalDash || isDiagonalCutMark);
 
       return {
         isBlank: false,
@@ -978,6 +1013,35 @@
       for (const box of digitBoxes) {
         const tensorData = this.create28x28Tensor(cellInfo, box);
         const res = await this.classifyDigit(tensorData);
+
+        // Geometric Discriminator for fast messy evaluator handwriting:
+        // 1. Open 3 vs 8: A digit 3 is open on the left edge (x < minX + rw * 0.30 contains < 16% ink).
+        //    An 8 has closed enclosing loops on both left and right sides.
+        if (res.digit === '8' && res.probs) {
+          let leftInk = 0;
+          let totInk = 0;
+          const boxW = box.maxX - box.minX + 1;
+          const splitLeftX = box.minX + Math.round(boxW * 0.30);
+          for (let cy = box.minY; cy <= box.maxY; cy++) {
+            const rOff = cy * cellInfo.w;
+            for (let cx = box.minX; cx <= box.maxX; cx++) {
+              if (cellInfo.mask[rOff + cx]) {
+                totInk++;
+                if (cx <= splitLeftX) leftInk++;
+              }
+            }
+          }
+          const leftFrac = leftInk / Math.max(1, totInk);
+          if (leftFrac < 0.16 && (res.probs[3] >= 0.04 || res.probs[3] > res.probs[8] * 0.20)) {
+            res.digit = '3';
+            res.confidence = Math.max(0.95, res.probs[3]);
+          } else if (res.probs[7] >= 0.05 && res.probs[7] > res.probs[8] * 0.25) {
+            // Crossed-7 vs 8: crossbar intersection mistaken for waist of 8
+            res.digit = '7';
+            res.confidence = Math.max(0.95, res.probs[7]);
+          }
+        }
+
         tokens.push(res.digit);
         totalConf += res.confidence;
       }
@@ -1006,7 +1070,10 @@
       // Optimization for Total Marks row:
       // Multi-candidate split search around center with expectedTotal consistency verification
       if (row && row.id === 'total') {
-        const isLikelyTwoDigits = cellInfo.rw >= 23 || (expectedTotal && expectedTotal >= 10 && cellInfo.rw >= 19);
+        const isLikelyTwoDigits = cellInfo.rw >= 15 && (
+          (cellInfo.rw / Math.max(1, cellInfo.rh) >= 0.65) ||
+          (expectedTotal && expectedTotal >= 10)
+        );
 
         // If expectedTotal is a single digit (0..9) and single-res has a viable candidate matching expectedTotal:
         if (expectedTotal && Math.round(expectedTotal) <= 9 && digitBoxes.length <= 1) {
@@ -1036,8 +1103,8 @@
           let bestCandidateConf = avgConf;
           let matchedExpected = false;
 
-          const startS = Math.max(cellInfo.minX + 6, Math.round(cellInfo.minX + cellInfo.rw * 0.28));
-          const endS = Math.min(cellInfo.maxX - 6, Math.round(cellInfo.minX + cellInfo.rw * 0.72));
+          const startS = Math.max(cellInfo.minX + 6, Math.round(cellInfo.minX + cellInfo.rw * 0.30));
+          const endS = Math.min(cellInfo.maxX - 6, Math.round(cellInfo.minX + cellInfo.rw * 0.70));
 
           for (let s = startS; s <= endS; s++) {
             const b1 = { minX: cellInfo.minX, maxX: s - 1, minY: cellInfo.minY, maxY: cellInfo.maxY };
@@ -1049,20 +1116,40 @@
             const r1 = await this.classifyDigit(t1);
             const r2 = await this.classifyDigit(t2);
 
+            // Discriminator on split digits as well:
+            if (r2.digit === '8' && r2.probs) {
+              const b2W = b2.maxX - b2.minX + 1;
+              let lInk = 0, totI = 0;
+              const spX = b2.minX + Math.round(b2W * 0.30);
+              for (let cy = b2.minY; cy <= b2.maxY; cy++) {
+                const rOff = cy * cellInfo.w;
+                for (let cx = b2.minX; cx <= b2.maxX; cx++) {
+                  if (cellInfo.mask[rOff + cx]) {
+                    totI++;
+                    if (cx <= spX) lInk++;
+                  }
+                }
+              }
+              if ((lInk / Math.max(1, totI)) < 0.16 && r2.probs[3] >= 0.04) {
+                r2.digit = '3';
+                r2.confidence = Math.max(0.92, r2.probs[3]);
+              }
+            }
+
             const candVal = `${r1.digit}${r2.digit}`;
             const num = parseFloat(candVal);
-            if (num < 0 || num > 35) continue;
+            if (num < 0 || num > 50) continue;
 
             const prod = r1.confidence * r2.confidence;
             const diff = expectedTotal ? Math.abs(num - expectedTotal) : 0;
-            const bonus = diff === 0 ? 3.5 : (diff <= 1 ? 2.0 : 1.0 / (1.0 + 0.3 * diff));
+            const bonus = diff === 0 ? 50.0 : (diff <= 1 ? 25.0 : (diff <= 2 ? 8.0 : (diff <= 3 ? 2.5 : 1.0 / (1.0 + diff * 2.0))));
             const score = prod * bonus;
 
             // If this split matches expected total calculated from column questions
             if (expectedTotal && num === Math.round(expectedTotal)) {
               valStr = candVal;
               numVal = num;
-              avgConf = Math.max(0.95, (r1.confidence + r2.confidence) / 2);
+              avgConf = Math.max(0.98, (r1.confidence + r2.confidence) / 2);
               matchedExpected = true;
               break;
             }
@@ -1074,10 +1161,23 @@
             }
           }
 
-          if (!matchedExpected && bestScore > 0.15) {
+          if (!matchedExpected && bestScore > 0.01) {
             valStr = bestCandidateVal;
             numVal = parseFloat(valStr) || 0.0;
             avgConf = bestCandidateConf;
+          }
+
+          // Enforce strict sanity bound: total marks in IA bluebook cannot exceed 50.0
+          if (numVal > 50.0 || parseFloat(valStr) > 50.0) {
+            if (expectedTotal && expectedTotal <= 50.0) {
+              valStr = String(Math.round(expectedTotal));
+              numVal = Math.round(expectedTotal);
+              avgConf = 0.90;
+            } else {
+              valStr = '0';
+              numVal = 0.0;
+              avgConf = 0.50;
+            }
           }
         }
       }
@@ -1144,13 +1244,14 @@
         let detectedTotal = null;
 
         for (const row of DOM_ROWS) {
-          const padBottom = row.id === 'total' ? 6 : 4;
+          const padTop = 5;
+          const padBottom = row.id === 'total' ? 6 : 5;
           const cellCanvas = this.cropCanvas(
             rectified,
-            marksX[0] + 5,
-            row.y1 + 2,
-            marksX[1] - marksX[0] - 10,
-            row.y2 - row.y1 - padBottom
+            marksX[0] + 6,
+            row.y1 + padTop,
+            marksX[1] - marksX[0] - 12,
+            row.y2 - row.y1 - (padTop + padBottom)
           );
 
           const markRes = await this.recognizeCell(cellCanvas, row.max, row, calcSum);

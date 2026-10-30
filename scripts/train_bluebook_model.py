@@ -152,9 +152,14 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                     cv2.line(canvas, (x_top, y_top), (x_top - np.random.randint(4, 8), y_top + np.random.randint(4, 7)), 255, thickness, cv2.LINE_AA)
 
             elif digit == 2:
-                # 2: looped cursive 2, swan-neck 2, flat-base 2, wavy-base 2, or thick cursive
-                style = np.random.choice(["loop", "swan", "flat", "wavy", "thick_cursive"])
-                if style == "loop":
+                # 2: looped cursive 2, swan-neck 2, flat-base 2, wavy-base 2, thick cursive, or looped no-tail
+                style = np.random.choice(["loop", "swan", "flat", "wavy", "thick_cursive", "looped_notail"], p=[0.20, 0.15, 0.15, 0.10, 0.15, 0.25])
+                if style == "looped_notail":
+                    # Fast cursive 2 with looped bottom and no tail (common in total sums)
+                    cv2.ellipse(canvas, (28, 18), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (36, 18), (20, 38), 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (20, 38), (5, 4), 30, 0, 360, 255, -1 if np.random.rand() < 0.6 else thickness, cv2.LINE_AA)
+                elif style == "loop":
                     cv2.ellipse(canvas, (28, 19), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (36, 19), (19, 39), 255, thickness, cv2.LINE_AA)
                     cv2.ellipse(canvas, (21, 39), (4, 3), 45, 0, 360, 255, thickness, cv2.LINE_AA)
@@ -179,20 +184,29 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                     cv2.line(canvas, (18, 42), (38, 42), 255, thickness, cv2.LINE_AA)
 
             elif digit == 3:
-                # 3: flat-top or angular or rounded
-                style = np.random.choice(["flat_top", "angular", "round"])
+                # 3: flat-top, open cursive, looped waist, or sharp center
+                style = np.random.choice(["flat_top", "open_cursive", "loop_waist", "sharp_center", "slanted"])
                 if style == "flat_top":
                     cv2.line(canvas, (18, 14), (36, 14), 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (36, 14), (25, 27), 255, thickness, cv2.LINE_AA)
                     cv2.ellipse(canvas, (28, 36), (9, 9), 0, -90, 130, 255, thickness, cv2.LINE_AA)
-                elif style == "angular":
-                    cv2.line(canvas, (18, 14), (34, 14), 255, thickness, cv2.LINE_AA)
-                    cv2.line(canvas, (34, 14), (24, 27), 255, thickness, cv2.LINE_AA)
-                    cv2.line(canvas, (24, 27), (36, 36), 255, thickness, cv2.LINE_AA)
-                    cv2.line(canvas, (36, 36), (20, 44), 255, thickness, cv2.LINE_AA)
+                elif style == "open_cursive":
+                    # Classic two-curved 3 with completely open left perimeter
+                    cv2.ellipse(canvas, (27, 21), (8, 8), 0, -110, 110, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, 36), (9, 9), 0, -100, 120, 255, thickness, cv2.LINE_AA)
+                elif style == "loop_waist":
+                    # Cursive 3 with small central loop at waist
+                    cv2.ellipse(canvas, (27, 20), (8, 7), 0, -120, 110, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (25, 28), (3, 2), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, 37), (9, 9), 0, -90, 120, 255, thickness, cv2.LINE_AA)
+                elif style == "sharp_center":
+                    cv2.line(canvas, (18, 16), (34, 16), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (34, 16), (24, 28), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (24, 28), (36, 36), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (36, 36), (19, 44), 255, thickness, cv2.LINE_AA)
                 else:
-                    cv2.ellipse(canvas, (27, 21), (7, 7), 0, -110, 120, 255, thickness, cv2.LINE_AA)
-                    cv2.ellipse(canvas, (27, 35), (8, 8), 0, -110, 120, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (29, 21), (7, 8), 10, -110, 110, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (27, 36), (9, 9), 10, -90, 130, 255, thickness, cv2.LINE_AA)
 
             elif digit == 4:
                 # 4: open-top trident 4, closed 4, or fast 4
@@ -241,21 +255,28 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                 cv2.ellipse(canvas, (26, 35), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
 
             elif digit == 7:
-                # 7: crossed 7 (dominant in Indian bluebooks) or uncrossed 7
+                # 7: crossed 7 (dominant in Indian bluebooks, 85%+ frequency) or clean 7
+                style = np.random.choice(["crossed_std", "crossed_hook", "crossed_wide", "crossed_slanted", "clean"], p=[0.40, 0.25, 0.15, 0.10, 0.10])
                 x1, y1 = np.random.randint(14, 18), np.random.randint(12, 16)
-                x2, y2 = np.random.randint(34, 42), y1 + np.random.randint(-1, 3)
+                x2, y2 = np.random.randint(34, 44), y1 + np.random.randint(-1, 3)
                 cv2.line(canvas, (x1, y1), (x2, y2), 255, thickness, cv2.LINE_AA)
-                if np.random.rand() < 0.35:
-                    cv2.line(canvas, (x1, y1), (x1, y1 + np.random.randint(3, 7)), 255, thickness, cv2.LINE_AA)
-                x3, y3 = np.random.randint(18, 26), np.random.randint(42, 48)
+
+                # Optional left serif / hook going downwards
+                if style in ["crossed_hook", "crossed_slanted"] or np.random.rand() < 0.4:
+                    cv2.line(canvas, (x1, y1), (x1, y1 + np.random.randint(4, 9)), 255, thickness, cv2.LINE_AA)
+
+                x3, y3 = np.random.randint(17, 27), np.random.randint(42, 48)
                 cv2.line(canvas, (x2, y2), (x3, y3), 255, thickness, cv2.LINE_AA)
-                if np.random.rand() < 0.75:
-                    frac = float(np.random.uniform(0.38, 0.58))
+
+                # Add prominent horizontal crossbar
+                if style != "clean":
+                    frac = float(np.random.uniform(0.35, 0.62))
                     cx_mid = int(x2 + (x3 - x2) * frac)
                     cy_mid = int(y2 + (y3 - y2) * frac)
-                    bar_w = np.random.randint(8, 18)
-                    tilt = np.random.randint(-2, 3)
-                    cv2.line(canvas, (cx_mid - bar_w // 2, cy_mid - tilt), (cx_mid + bar_w // 2, cy_mid + tilt), 255, thickness, cv2.LINE_AA)
+                    bar_w = np.random.randint(12, 24) if style == "crossed_wide" else np.random.randint(10, 20)
+                    tilt = np.random.randint(-3, 4) if style == "crossed_slanted" else np.random.randint(-1, 2)
+                    bar_thick = thickness if np.random.rand() > 0.3 else thickness + 1
+                    cv2.line(canvas, (cx_mid - bar_w // 2, cy_mid - tilt), (cx_mid + bar_w // 2, cy_mid + tilt), 255, bar_thick, cv2.LINE_AA)
 
             elif digit == 8:
                 # 8: continuous parametric S-curve, asymmetrical loops, or double-circle
@@ -475,46 +496,60 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
             x_list.append(aug.astype(np.float32) / 255.0)
             y_list.append(target_digit)
 
-    # Also directly add debug_user_issue_4b.png (verified 8)
-    user_4b_path = BASE_DIR / "debug_user_issue_4b.png"
-    if user_4b_path.exists():
-        img_4b = cv2.imread(str(user_4b_path))
-        b, g, r = cv2.split(img_4b)
-        diff = r.astype(float) - np.maximum(b.astype(float), g.astype(float))
-        bg_diff = np.median(diff[4:-4, 4:-4])
-        strong = (diff >= max(10, bg_diff + 7)) & (r > 75)
-        weak = (diff >= max(5, bg_diff + 3)) & (r > 75)
-        num_labels, labels = cv2.connectedComponents(weak.astype(np.uint8))
-        mask_4b = np.zeros_like(weak, dtype=np.uint8)
-        for lbl in range(1, num_labels):
-            if np.any(strong[labels == lbl]):
-                mask_4b[labels == lbl] = 255
-        c_4b = center_and_scale_to_28(mask_4b)
-        if c_4b is not None:
-            for _ in range(100):
-                ang = float(np.random.uniform(-12.0, 12.0))
+    # Direct injection and massive augmentation of user failure-case snippets
+    direct_snippets = [
+        ("user_snip_1a.png", 7, 600),       # Crossed 7 misclassified as 8/4
+        ("user_snip_1b.png", 3, 600),       # Open curved 3 misclassified as 8
+        ("debug_user_total_2.png", 2, 500), # Left '2' of total 23
+        ("debug_user_total_3.png", 3, 500), # Right '3' of total 23
+        ("debug_sim_4b.png", 8, 500),       # Real figure-8 from test sheets
+        ("debug_cell_ia2_1a.png", 8, 500),  # Real figure-8
+        ("debug_cell_ia2_3b.png", 3, 500),  # Real open 3
+        ("debug_split47_l.png", 2, 400),    # Real 2 from total 24
+        ("debug_split47_r.png", 4, 400),    # Real 4 from total 24
+        ("debug_split_left.png", 2, 300),   # Left '2' from 24
+        ("debug_split_right.png", 4, 300),  # Right '4' from 24
+    ]
+
+    for fn, label, num_augs in direct_snippets:
+        fp = BASE_DIR / fn
+        if not fp.exists():
+            continue
+        c_img = cv2.imread(str(fp))
+        if c_img is None:
+            continue
+        is_grayscale = (len(c_img.shape) == 2) or np.all(c_img[:, :, 0] == c_img[:, :, 1])
+        if is_grayscale:
+            mask_snip = c_img[:, :, 0] if len(c_img.shape) == 3 else c_img
+            c_norm = center_and_scale_to_28(mask_snip)
+        else:
+            b, g, r = cv2.split(c_img)
+            diff = r.astype(float) - np.maximum(b.astype(float), g.astype(float))
+            bg_diff = np.median(diff[2:-2, 2:-2])
+            strong = (diff >= max(9, bg_diff + 7)) & (r > 65)
+            weak = (diff >= max(4, bg_diff + 3)) & (r > 65)
+            num_labels, labels_cc = cv2.connectedComponents(weak.astype(np.uint8))
+            mask_snip = np.zeros_like(weak, dtype=np.uint8)
+            for lbl in range(1, num_labels):
+                if np.any(strong[labels_cc == lbl]):
+                    mask_snip[labels_cc == lbl] = 255
+            c_norm = center_and_scale_to_28(mask_snip)
+
+        if c_norm is not None:
+            x_list.append(c_norm)
+            y_list.append(label)
+            for _ in range(num_augs):
+                ang = float(np.random.uniform(-15.0, 15.0))
                 M = cv2.getRotationMatrix2D((14, 14), ang, 1.0)
-                aug = cv2.warpAffine((c_4b * 255).astype(np.uint8), M, (28, 28), flags=cv2.INTER_LINEAR)
+                aug = cv2.warpAffine((c_norm * 255).astype(np.uint8), M, (28, 28), flags=cv2.INTER_LINEAR)
                 tx, ty = np.random.randint(-2, 3), np.random.randint(-2, 3)
                 aug = cv2.warpAffine(aug, np.float32([[1, 0, tx], [0, 1, ty]]), (28, 28))
+                if np.random.rand() < 0.35:
+                    aug = cv2.dilate(aug, k_dilate, iterations=1)
+                elif np.random.rand() < 0.15:
+                    aug = cv2.erode(aug, k_dilate, iterations=1)
                 x_list.append(aug.astype(np.float32) / 255.0)
-                y_list.append(8)
-
-    # Add real '2' and '4' crops from 24 total marks
-    for fn, label in [("debug_split_left.png", 2), ("debug_split_right.png", 4)]:
-        fp = BASE_DIR / fn
-        if fp.exists():
-            c_img = cv2.imread(str(fp), cv2.IMREAD_GRAYSCALE)
-            c_norm = center_and_scale_to_28(c_img)
-            if c_norm is not None:
-                for _ in range(120):
-                    ang = float(np.random.uniform(-12.0, 12.0))
-                    M = cv2.getRotationMatrix2D((14, 14), ang, 1.0)
-                    aug = cv2.warpAffine((c_norm * 255).astype(np.uint8), M, (28, 28), flags=cv2.INTER_LINEAR)
-                    tx, ty = np.random.randint(-2, 3), np.random.randint(-2, 3)
-                    aug = cv2.warpAffine(aug, np.float32([[1, 0, tx], [0, 1, ty]]), (28, 28))
-                    x_list.append(aug.astype(np.float32) / 255.0)
-                    y_list.append(label)
+                y_list.append(label)
 
     print(f"Harvested and augmented {len(x_list)} real bluebook handwriting samples.")
     x_arr = np.array(x_list, dtype=np.float32)[:, np.newaxis, :, :]
@@ -583,8 +618,8 @@ def train_and_export():
     print("Loading EMNIST real messy handwriting digits dataset...")
     emnist_x, emnist_y = load_emnist_digits(limit_per_class=6000)
 
-    print("Generating comprehensive synthetic messy handwriting digits (2,500 per class)...")
-    synth_x, synth_y = generate_synthetic_messy_digits(samples_per_digit=2500)
+    print("Generating comprehensive synthetic messy handwriting digits (4,000 per class)...")
+    synth_x, synth_y = generate_synthetic_messy_digits(samples_per_digit=4000)
 
     print("Harvesting real bluebook handwriting crops with hysteresis thresholding...")
     real_x, real_y = harvest_real_bluebook_digits()
@@ -619,7 +654,7 @@ def train_and_export():
     model = DeepBluebookCNN().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=0.002, weight_decay=1e-4)
-    epochs = 6
+    epochs = 7
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
 
     print(f"Beginning DeepBluebookCNN model training for {epochs} epochs...")

@@ -124,23 +124,24 @@ class EvalSheetExtractor:
 
         for c in cnts:
             area = cv2.contourArea(c)
-            if area > (w * h * 0.35):
+            if area > (w * h * 0.20):
                 bx, by, bw, bh = cv2.boundingRect(c)
-                if bw / float(w) >= 0.65 and bh / float(h) >= 0.55:
+                if bw / float(w) >= 0.45 and bh / float(h) >= 0.45:
                     peri = cv2.arcLength(c, True)
-                    approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-                    if len(approx) == 4:
-                        pts = self._order_points(approx.reshape(4, 2).astype("float32"))
-                        dest_w, dest_h = 600, 780
-                        dst = np.array([
-                            [0, 0],
-                            [dest_w - 1, 0],
-                            [dest_w - 1, dest_h - 1],
-                            [0, dest_h - 1]
-                        ], dtype="float32")
-                        m = cv2.getPerspectiveTransform(pts, dst)
-                        warped = cv2.warpPerspective(img_bgr, m, (dest_w, dest_h))
-                        return warped
+                    for eps in [0.02, 0.025, 0.03]:
+                        approx = cv2.approxPolyDP(c, eps * peri, True)
+                        if len(approx) == 4:
+                            pts = self._order_points(approx.reshape(4, 2).astype("float32"))
+                            dest_w, dest_h = 600, 780
+                            dst = np.array([
+                                [0, 0],
+                                [dest_w - 1, 0],
+                                [dest_w - 1, dest_h - 1],
+                                [0, dest_h - 1]
+                            ], dtype="float32")
+                            m = cv2.getPerspectiveTransform(pts, dst)
+                            warped = cv2.warpPerspective(img_bgr, m, (dest_w, dest_h))
+                            return warped
 
         return None
 
@@ -370,15 +371,16 @@ class EvalSheetExtractor:
 
         rx, ry, rw, rh = cv2.boundingRect(pts)
         density = cv2.countNonZero(b_thresh) / float(max(1, rw * rh))
+        ratio = rw / float(max(1, rh))
 
-        # 1. Dash: short and wide
-        if rh <= max(14, int(h * 0.28)) and rw >= max(18, int(w * 0.35)):
+        # 1. Dash / horizontal line
+        if (rw >= 10 and rh <= 11) or (rh <= 18 and ratio >= 2.2 and rw >= 16) or (ratio >= 3.0 and rw >= 25):
             return True
         # 2. Large diagonal slash or cross-out X across the box
-        if rw >= int(w * 0.70) and rh >= int(h * 0.65) and density < 0.22:
+        if rw >= int(w * 0.50) and rh >= int(h * 0.50) and density < 0.25:
             return True
         # 3. Very low fill
-        if cv2.countNonZero(b_thresh) < 25:
+        if cv2.countNonZero(b_thresh) < 20:
             return True
 
         return False

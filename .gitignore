@@ -35,4 +35,7 @@ Thumbs.db
 *.log
 debug_*.png
 debug_*.jpg
+row_*.png
+user_snip_*.png
+training_data/
 models/mnist_data/
