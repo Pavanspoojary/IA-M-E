@@ -1,0 +1,12 @@
+# Ignore Python backend files during Vercel static build
+server.py
+app.py
+src/
+tests/
+scripts/
+Dockerfile
+requirements.txt
+requirements-dev.txt
+.venv/
+.pytest_cache/
+digit_templates/

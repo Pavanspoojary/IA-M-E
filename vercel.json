@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "outputDirectory": "web",
+  "cleanUrls": true,
+  "rewrites": [
+    { "source": "/static/(.*)", "destination": "/$1" },
+    { "source": "/models/(.*)", "destination": "/models/$1" },
+    { "source": "/sample_data/(.*)", "destination": "/sample_data/$1" }
+  ]
+}

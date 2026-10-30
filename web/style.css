@@ -80,6 +80,18 @@ header {
   white-space: nowrap;
 }
 
+.engine-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--success-bg);
+  color: var(--success-text);
+  border: 1px solid var(--success-border);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
 .model-pill.offline {
   background: var(--warning-bg);
   color: var(--warning-text);

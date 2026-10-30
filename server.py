@@ -106,6 +106,9 @@ def serialize_record(record: StudentAssessmentRecord) -> Dict[str, Any]:
 if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
+if (BASE_DIR / "models").exists():
+    app.mount("/models", StaticFiles(directory=str(BASE_DIR / "models")), name="models")
+
 
 @app.get("/health")
 async def health_check():
@@ -425,3 +428,13 @@ async def export_sheet(req: SheetExportRequest):
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }
         return Response(content=xlsx_bytes, media_type=headers["Content-Type"], headers=headers)
+
+
+@app.get("/{file_name:path}")
+async def serve_static_root(file_name: str):
+    """Serve relative static files directly from web/."""
+    from fastapi.responses import FileResponse
+    target = WEB_DIR / file_name
+    if target.exists() and target.is_file():
+        return FileResponse(target)
+    raise HTTPException(status_code=404, detail="File not found")

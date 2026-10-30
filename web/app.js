@@ -13,6 +13,18 @@
   let currentExtractionData = null;
   let currentSheetIndex = 0;
 
+  // Initialize In-Browser Extraction Engine
+  const browserEngine = typeof BrowserExtractionEngine !== 'undefined' ? new BrowserExtractionEngine() : null;
+  if (browserEngine) {
+    browserEngine.init().then((ready) => {
+      const badge = document.getElementById('engineStatusBadge');
+      if (badge) {
+        badge.textContent = ready ? 'In-Browser Engine (Active)' : 'Server Mode';
+        if (!ready) badge.classList.add('offline');
+      }
+    });
+  }
+
   // DOM Elements
   const dropzone = document.getElementById('dropzone');
   const cameraInput = document.getElementById('cameraInput');
@@ -143,17 +155,34 @@
     progressBox.style.display = 'block';
 
     try {
-      const resp = await fetch('/api/extract-sheet', {
-        method: 'POST',
-        body: formData,
-      });
+      let data = null;
 
-      if (!resp.ok) {
-        const err = await resp.json();
-        throw new Error(err.detail || 'Extraction failed');
+      // In-Browser Neural Extraction (No server required)
+      if (selectedFile && browserEngine) {
+        progressBox.textContent = 'Processing document in local browser via ONNX WASM...';
+        try {
+          data = await browserEngine.processDocument(selectedFile, selectedIA);
+        } catch (clientErr) {
+          console.warn('Browser extraction failed, attempting server fallback:', clientErr);
+        }
       }
 
-      const data = await resp.json();
+      // Fallback to server endpoint if running with local Python server
+      if (!data) {
+        progressBox.textContent = 'Cropping column and recognizing handwritten marks...';
+        const resp = await fetch('/api/extract-sheet', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          throw new Error(err.detail || 'Extraction failed');
+        }
+
+        data = await resp.json();
+      }
+
       currentExtractionData = data;
       renderResults(data);
     } catch (err) {
@@ -414,6 +443,34 @@
       return;
     }
 
+    let safeIa = 'IA_1';
+    if (selectedIA.includes('All')) {
+      safeIa = 'All_IA';
+    } else if (selectedIA.includes('IA 2')) {
+      safeIa = 'IA_2';
+    } else if (selectedIA.includes('IA 3')) {
+      safeIa = 'IA_3';
+    }
+
+    const ext = format === 'csv' ? 'csv' : 'xlsx';
+    const filename = `IA_Marks_Evaluation_${safeIa}.${ext}`;
+
+    // 1. In-browser direct export (Zero server calls)
+    if (browserEngine) {
+      try {
+        if (format === 'csv') {
+          browserEngine.downloadCsv(currentExtractionData, filename);
+          return;
+        } else if (typeof XLSX !== 'undefined') {
+          browserEngine.downloadXlsx(currentExtractionData, filename);
+          return;
+        }
+      } catch (clientExportErr) {
+        console.warn('Browser export failed, attempting server fallback:', clientExportErr);
+      }
+    }
+
+    // 2. Server fallback export
     try {
       // Prepare lightweight data payload omitting heavy base64 image crops (drops payload from 18MB to 4KB)
       const cleanSheets = (currentExtractionData.sheets || []).map((s) => {

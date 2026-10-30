@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>IA Bluebook Marks Extraction System</title>
+  <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -12,6 +13,9 @@
       <div class="title-group">
         <h1>IA Bluebook Marks Extraction System</h1>
         <p>Continuous Internal Assessment evaluation sheet digitization and export engine</p>
+      </div>
+      <div class="header-badges">
+        <span class="engine-badge" id="engineStatusBadge">In-Browser Engine (WASM)</span>
       </div>
     </header>
 
@@ -124,6 +128,11 @@
     </section>
   </div>
 
-  <script src="/static/app.js"></script>
+  <!-- In-Browser Neural & Document Toolkits -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/ort.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="browser_extractor.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
