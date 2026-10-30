@@ -123,20 +123,31 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
                     cv2.line(canvas, (x_top, y_top), (x_top - np.random.randint(4, 8), y_top + np.random.randint(4, 7)), 255, thickness, cv2.LINE_AA)
 
             elif digit == 2:
-                # 2: looped 2, swan 2, or flat-base 2
-                style = np.random.choice(["loop", "swan", "flat"])
+                # 2: looped cursive 2, swan-neck 2, flat-base 2, or wavy-base 2
+                style = np.random.choice(["loop", "swan", "flat", "wavy"])
                 if style == "loop":
-                    # top arc
-                    cv2.ellipse(canvas, (28, 20), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
+                    # top arch
+                    cv2.ellipse(canvas, (28, 19), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
                     # diagonal down to bottom-left
-                    cv2.line(canvas, (36, 20), (20, 38), 255, thickness, cv2.LINE_AA)
-                    # loop at bottom
-                    cv2.ellipse(canvas, (21, 38), (4, 3), 45, 0, 360, 255, thickness, cv2.LINE_AA)
-                    # tail
-                    cv2.line(canvas, (21, 41), (38 + np.random.randint(-2, 5), 41 + np.random.randint(-2, 2)), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (36, 19), (19, 39), 255, thickness, cv2.LINE_AA)
+                    # loop at baseline
+                    cv2.ellipse(canvas, (21, 39), (4, 3), 45, 0, 360, 255, thickness, cv2.LINE_AA)
+                    # tail extending right
+                    cv2.line(canvas, (21, 41), (39 + np.random.randint(-2, 5), 41 + np.random.randint(-2, 2)), 255, thickness, cv2.LINE_AA)
+                elif style == "swan":
+                    # curved swan neck with curved head
+                    cv2.ellipse(canvas, (27, 18), (9, 8), 0, 160, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (36, 18), (17, 43), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (17, 43), (40, 43), 255, thickness, cv2.LINE_AA)
+                elif style == "wavy":
+                    cv2.ellipse(canvas, (28, 19), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (36, 19), (18, 41), 255, thickness, cv2.LINE_AA)
+                    # wavy tail
+                    pts = np.array([[18, 41], [26, 39], [34, 43], [40, 41]], np.int32)
+                    cv2.polylines(canvas, [pts], False, 255, thickness, cv2.LINE_AA)
                 else:
-                    cv2.ellipse(canvas, (28, 20), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
-                    cv2.line(canvas, (36, 20), (18, 42), 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, 19), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (36, 19), (18, 42), 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (18, 42), (38, 42), 255, thickness, cv2.LINE_AA)
 
             elif digit == 3:
@@ -210,27 +221,54 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
                 cv2.ellipse(canvas, (26, 35), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
 
             elif digit == 7:
-                # 7: crossed 7 or sharp angled 7
+                # 7: crossed 7 (dominant in Indian bluebooks) or uncrossed 7
                 x1, y1 = np.random.randint(14, 18), np.random.randint(12, 16)
-                x2, y2 = np.random.randint(34, 40), y1 + np.random.randint(-1, 2)
+                x2, y2 = np.random.randint(34, 42), y1 + np.random.randint(-1, 3)
                 cv2.line(canvas, (x1, y1), (x2, y2), 255, thickness, cv2.LINE_AA)
-                x3, y3 = np.random.randint(20, 26), np.random.randint(42, 48)
+                if np.random.rand() < 0.35:
+                    # downward left hook / serif at start of 7
+                    cv2.line(canvas, (x1, y1), (x1, y1 + np.random.randint(3, 7)), 255, thickness, cv2.LINE_AA)
+                x3, y3 = np.random.randint(18, 26), np.random.randint(42, 48)
                 cv2.line(canvas, (x2, y2), (x3, y3), 255, thickness, cv2.LINE_AA)
-                if np.random.rand() < 0.65:
-                    # crossbar
-                    cx_mid = (x2 + x3) // 2
-                    cy_mid = (y2 + y3) // 2
-                    bar_w = np.random.randint(8, 14)
-                    cv2.line(canvas, (cx_mid - bar_w // 2, cy_mid), (cx_mid + bar_w // 2, cy_mid), 255, thickness, cv2.LINE_AA)
+                if np.random.rand() < 0.75:
+                    # horizontal crossbar
+                    frac = float(np.random.uniform(0.38, 0.58))
+                    cx_mid = int(x2 + (x3 - x2) * frac)
+                    cy_mid = int(y2 + (y3 - y2) * frac)
+                    bar_w = np.random.randint(8, 18)
+                    tilt = np.random.randint(-2, 3)
+                    cv2.line(canvas, (cx_mid - bar_w // 2, cy_mid - tilt), (cx_mid + bar_w // 2, cy_mid + tilt), 255, thickness, cv2.LINE_AA)
 
             elif digit == 8:
-                # 8: S-curve figure 8 or double circle
-                if np.random.rand() < 0.5:
+                # 8: continuous parametric S-curve, asymmetrical loops, or double-circle
+                style = np.random.choice(["scurve", "asymmetric", "circles"])
+                if style == "scurve":
+                    cx, cy = 28 + np.random.randint(-2, 3), 28 + np.random.randint(-2, 3)
+                    w_8 = np.random.randint(8, 12)
+                    h_8 = np.random.randint(14, 18)
+                    top_scale = float(np.random.uniform(0.75, 0.95))
+                    t = np.linspace(0, 2 * np.pi, 80)
+                    xs = []
+                    ys = []
+                    for ti in t:
+                        curr_y = cy - h_8 * np.cos(ti)
+                        # scale width if in top half
+                        w_curr = w_8 * top_scale if curr_y < cy else w_8
+                        curr_x = cx + w_curr * np.sin(2 * ti)
+                        xs.append(curr_x)
+                        ys.append(curr_y)
+                    pts = np.int32(np.column_stack([xs, ys]))
+                    is_closed = bool(np.random.rand() > 0.15)
+                    cv2.polylines(canvas, [pts], is_closed, 255, thickness, cv2.LINE_AA)
+                elif style == "asymmetric":
+                    # top loop smaller than bottom loop
+                    top_r = np.random.randint(6, 8)
+                    bot_r = np.random.randint(8, 11)
+                    cv2.ellipse(canvas, (28, 20), (top_r, top_r), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, 36), (bot_r, bot_r), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                else:
                     cv2.ellipse(canvas, (28, 20), (7, 7), 0, 0, 360, 255, thickness, cv2.LINE_AA)
                     cv2.ellipse(canvas, (28, 36), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
-                else:
-                    cv2.ellipse(canvas, (28, 22), (8, 8), 20, 0, 360, 255, thickness, cv2.LINE_AA)
-                    cv2.ellipse(canvas, (28, 36), (9, 9), -20, 0, 360, 255, thickness, cv2.LINE_AA)
 
             elif digit == 9:
                 # 9: top circle + straight or hooked stem
@@ -280,6 +318,7 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
 
     ground_truth = {
         ("distribution_marks_sample_1.jpg", "IA 1", "1a"): "5",
+        ("distribution_marks_sample_1.jpg", "IA 1", "1b"): "2",
         ("distribution_marks_sample_1.jpg", "IA 1", "4b"): "2",
         ("distribution_marks_sample_1.jpg", "IA 2", "1a"): "7",
         ("distribution_marks_sample_1.jpg", "IA 2", "3a"): "5",
@@ -288,12 +327,13 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
         ("distribution_marks_sample_2.jpg", "IA 1", "1b"): "4",
         ("distribution_marks_sample_2.jpg", "IA 1", "4a"): "4",
         ("distribution_marks_sample_2.jpg", "IA 1", "4b"): "4",
-        ("distribution_marks_sample_2.jpg", "IA 1", "4c"): "6",
+        ("distribution_marks_sample_2.jpg", "IA 1", "4c"): "7",
         ("distribution_marks_sample_2.jpg", "IA 2", "1a"): "8",
         ("distribution_marks_sample_2.jpg", "IA 2", "1b"): "3",
         ("distribution_marks_sample_2.jpg", "IA 2", "4a"): "5",
         ("distribution_marks_sample_2.jpg", "IA 2", "4b"): "8",
         ("distribution_marks_sample_3.jpg", "IA 1", "1a"): "5",
+        ("distribution_marks_sample_3.jpg", "IA 1", "1b"): "2",
         ("distribution_marks_sample_3.jpg", "IA 1", "4b"): "2",
         ("distribution_marks_sample_3.jpg", "IA 2", "1a"): "7",
         ("distribution_marks_sample_3.jpg", "IA 2", "3a"): "5",
@@ -361,7 +401,8 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
 
         b, g, red = cv2.split(cell)
         diff = red.astype(int) - np.maximum(b, g).astype(int)
-        mask = (diff > 16).astype(np.uint8) * 255
+        med_diff = float(np.median(diff))
+        mask = ((diff > med_diff + 8) & (diff >= 16)).astype(np.uint8) * 255
         mask[:2, :] = 0; mask[-2:, :] = 0; mask[:, :2] = 0; mask[:, -2:] = 0
 
         cnt = cv2.countNonZero(mask)
@@ -557,7 +598,19 @@ def train_and_export():
         onnx.save_model(loaded_m, str(MODEL_PATH), save_as_external_data=False)
         data_file.unlink(missing_ok=True)
 
-    print(f"ONNX model saved successfully: {MODEL_PATH.stat().st_size / 1024:.1f} KB")
+    # Standardize ONNX IR version to 8 for onnxruntime-web compatibility
+    import onnx
+    import shutil
+    loaded_m = onnx.load(str(MODEL_PATH))
+    loaded_m.ir_version = 8
+    onnx.save(loaded_m, str(MODEL_PATH))
+
+    # Sync to web and public model paths
+    for dest_dir in [BASE_DIR / "public" / "models", BASE_DIR / "web" / "models"]:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(MODEL_PATH, dest_dir / "digit_model.onnx")
+
+    print(f"ONNX model saved successfully (IR version 8): {MODEL_PATH.stat().st_size / 1024:.1f} KB")
 
 
 if __name__ == "__main__":
