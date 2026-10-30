@@ -491,7 +491,7 @@
      * Extract red-pen strokes and check strikeout status.
      * Uses adaptive background thresholding to eliminate paper tint and shadow false-positives.
      */
-    processCellInk(cellCanvas) {
+    processCellInk(cellCanvas, row) {
       const w = cellCanvas.width;
       const h = cellCanvas.height;
       const ctx = cellCanvas.getContext('2d', { willReadFrequently: true });
@@ -499,12 +499,12 @@
       const data = imgData.data;
 
       // 1. Compute ambient paper background red difference median
-      // Sample inner region (shave 4px to avoid border lines)
+      // Sample inner region (shave 2px to avoid border lines)
       const diffValues = [];
-      for (let y = 4; y < h - 4; y += 2) {
-        const row = y * w;
-        for (let x = 4; x < w - 4; x += 2) {
-          const idx = (row + x) * 4;
+      for (let y = 2; y < h - 2; y += 2) {
+        const rowOffset = y * w;
+        for (let x = 2; x < w - 2; x += 2) {
+          const idx = (rowOffset + x) * 4;
           const r = data[idx];
           const g = data[idx + 1];
           const b = data[idx + 2];
@@ -513,36 +513,33 @@
       }
       diffValues.sort((a, b) => a - b);
       const bgDiff = diffValues.length > 0 ? diffValues[Math.floor(diffValues.length * 0.5)] : 0;
-      const redThreshold = Math.max(10, bgDiff + 7);
+      const highThresh = Math.max(9, bgDiff + 7);
+      const lowThresh = Math.max(4, bgDiff + 3);
 
-      // Stroke mask (1 for stroke, 0 for background)
-      const mask = new Uint8Array(w * h);
-      let redCount = 0;
+      // Two-pass hysteresis thresholding:
+      // Pass 1: detect strong red seeds and candidate weak pixels
+      const strongMask = new Uint8Array(w * h);
+      const weakMask = new Uint8Array(w * h);
+      let strongCount = 0;
       let darkCount = 0;
 
-      let minX = w,
-        maxX = -1,
-        minY = h,
-        maxY = -1;
-
-      // Scan inner region (shave 4px border to ignore table lines)
-      for (let y = 4; y < h - 4; y++) {
-        const row = y * w;
-        for (let x = 4; x < w - 4; x++) {
-          const idx = (row + x) * 4;
+      for (let y = 2; y < h - 2; y++) {
+        const rowOffset = y * w;
+        for (let x = 2; x < w - 2; x++) {
+          const idx = (rowOffset + x) * 4;
           const r = data[idx];
           const g = data[idx + 1];
           const b = data[idx + 2];
-
-          // Red ink isolation with background adaptation
           const diff = r - Math.max(g, b);
-          if (diff >= redThreshold && r > 75) {
-            mask[row + x] = 1;
-            redCount++;
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
+
+          if (r > 65) {
+            if (diff >= highThresh) {
+              strongMask[rowOffset + x] = 1;
+              weakMask[rowOffset + x] = 1;
+              strongCount++;
+            } else if (diff >= lowThresh) {
+              weakMask[rowOffset + x] = 1;
+            }
           } else {
             const lum = 0.299 * r + 0.587 * g + 0.114 * b;
             if (lum < 75 && r < 90 && g < 90 && b < 90) darkCount++;
@@ -550,15 +547,70 @@
         }
       }
 
+      // Stroke mask (1 for stroke, 0 for background)
+      const mask = new Uint8Array(w * h);
+      let redCount = 0;
+      let minX = w,
+        maxX = -1,
+        minY = h,
+        maxY = -1;
+
+      // Pass 2: BFS flood-fill from strong seeds along weak mask with 8-connectivity
+      if (strongCount >= 10) {
+        const queue = new Int32Array(w * h);
+        let qHead = 0, qTail = 0;
+
+        for (let idx = 0; idx < w * h; idx++) {
+          if (strongMask[idx]) {
+            mask[idx] = 1;
+            redCount++;
+            queue[qTail++] = idx;
+            const cy = Math.floor(idx / w);
+            const cx = idx % w;
+            if (cx < minX) minX = cx;
+            if (cx > maxX) maxX = cx;
+            if (cy < minY) minY = cy;
+            if (cy > maxY) maxY = cy;
+          }
+        }
+
+        while (qHead < qTail) {
+          const curr = queue[qHead++];
+          const cy = Math.floor(curr / w);
+          const cx = curr % w;
+
+          for (let dy = -1; dy <= 1; dy++) {
+            const ny = cy + dy;
+            if (ny < 2 || ny >= h - 2) continue;
+            const nrow = ny * w;
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = cx + dx;
+              if (nx < 2 || nx >= w - 2) continue;
+              const nidx = nrow + nx;
+              if (weakMask[nidx] && !mask[nidx]) {
+                mask[nidx] = 1;
+                redCount++;
+                queue[qTail++] = nidx;
+                if (nx < minX) minX = nx;
+                if (nx > maxX) maxX = nx;
+                if (ny < minY) minY = ny;
+                if (ny > maxY) maxY = ny;
+              }
+            }
+          }
+        }
+      }
+
       // If red ink is insufficient, check for dark pen ink (black/blue ink)
       if (redCount < 20 && darkCount >= 35) {
         for (let y = 5; y < h - 5; y++) {
-          const row = y * w;
+          const rowOffset = y * w;
           for (let x = 5; x < w - 5; x++) {
-            const idx = (row + x) * 4;
+            const idx = (rowOffset + x) * 4;
             const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
             if (lum < 75 && data[idx] < 90 && data[idx + 1] < 90 && data[idx + 2] < 90) {
-              mask[row + x] = 1;
+              mask[rowOffset + x] = 1;
               if (x < minX) minX = x;
               if (x > maxX) maxX = x;
               if (y < minY) minY = y;
@@ -578,24 +630,28 @@
       const rh = maxY - minY + 1;
       const ratio = rw / Math.max(1, rh);
 
-      if (rw < 6 || rh < 10) {
+      if (rw < 6 || rh < 8) {
         return { isBlank: true, isStrikeout: false, mask, minX, maxX, minY, maxY, w, h };
       }
 
-      // Check max vertical stroke thickness across columns
+      // Check vertical stroke thickness across columns
       let maxColSpan = 0;
+      let sumColSpan = 0;
       for (let x = minX; x <= maxX; x++) {
         let span = 0;
         for (let y = minY; y <= maxY; y++) {
           if (mask[y * w + x]) span++;
         }
         if (span > maxColSpan) maxColSpan = span;
+        sumColSpan += span;
       }
+      const avgColSpan = sumColSpan / Math.max(1, rw);
 
-      // Strikeout detection rule:
-      // Real strikeouts are thin (rh <= 12, maxColSpan <= 7), wide (rw >= 26), and flat (ratio >= 2.6).
-      // If rh >= 15 or maxColSpan >= 10, it is a vertical handwritten stroke, NEVER a strikeout!
-      const isStrikeout = (rh <= 12 && rw >= 26 && ratio >= 2.6 && maxColSpan <= 7);
+      // Strikeout / Cut Mark detection rule:
+      // Real strikeouts are wide horizontal lines drawn across the cell (ratio >= 2.2, rw >= 20).
+      // Total Marks cell is NEVER a strikeout (always numeric or blank).
+      const isTotal = row && (row.id === 'total' || (row.max && row.max > 10.0));
+      const isStrikeout = !isTotal && ((ratio >= 2.2 && rw >= 20) || (rw >= 38 && ratio >= 2.0));
 
       return {
         isBlank: false,
@@ -847,21 +903,13 @@
       const results = await this.session.run({ input: inputTensor });
       const output = results.output.data;
 
-      // Check if output is already softmax probabilities
+      const probs = new Float32Array(10);
       let sum = 0;
       for (let i = 0; i < 10; i++) sum += output[i];
 
-      let bestIdx = 0;
-      let bestProb = -Infinity;
-
       if (Math.abs(sum - 1.0) < 0.05) {
         // Output is already softmax probabilities
-        for (let i = 0; i < 10; i++) {
-          if (output[i] > bestProb) {
-            bestProb = output[i];
-            bestIdx = i;
-          }
-        }
+        for (let i = 0; i < 10; i++) probs[i] = output[i];
       } else {
         // Logits: compute stable softmax
         let maxLogit = -Infinity;
@@ -869,23 +917,28 @@
           if (output[i] > maxLogit) maxLogit = output[i];
         }
         let expSum = 0;
-        const exps = new Float32Array(10);
         for (let i = 0; i < 10; i++) {
-          exps[i] = Math.exp(output[i] - maxLogit);
-          expSum += exps[i];
+          probs[i] = Math.exp(output[i] - maxLogit);
+          expSum += probs[i];
         }
         for (let i = 0; i < 10; i++) {
-          const p = exps[i] / expSum;
-          if (p > bestProb) {
-            bestProb = p;
-            bestIdx = i;
-          }
+          probs[i] /= expSum;
+        }
+      }
+
+      let bestIdx = 0;
+      let bestProb = -Infinity;
+      for (let i = 0; i < 10; i++) {
+        if (probs[i] > bestProb) {
+          bestProb = probs[i];
+          bestIdx = i;
         }
       }
 
       return {
         digit: String(bestIdx),
         confidence: Math.round(bestProb * 1000) / 1000,
+        probs,
       };
     }
 
@@ -893,7 +946,7 @@
      * Process a single cell and determine mark value.
      */
     async recognizeCell(cellCanvas, maxMarks, row, expectedTotal) {
-      const cellInfo = this.processCellInk(cellCanvas);
+      const cellInfo = this.processCellInk(cellCanvas, row);
 
       if (cellInfo.isBlank) {
         return {
@@ -952,48 +1005,80 @@
 
       // Optimization for Total Marks row:
       // Multi-candidate split search around center with expectedTotal consistency verification
-      if (row && row.id === 'total' && cellInfo.rw >= 24) {
-        let bestProd = -1;
-        let bestCandidateVal = valStr;
-        let bestCandidateConf = avgConf;
-        let matchedExpected = false;
+      if (row && row.id === 'total') {
+        const isLikelyTwoDigits = cellInfo.rw >= 23 || (expectedTotal && expectedTotal >= 10 && cellInfo.rw >= 19);
 
-        const startS = Math.max(cellInfo.minX + 8, Math.round(cellInfo.minX + cellInfo.rw * 0.38));
-        const endS = Math.min(cellInfo.maxX - 8, Math.round(cellInfo.minX + cellInfo.rw * 0.65));
-
-        for (let s = startS; s <= endS; s++) {
-          const b1 = { minX: cellInfo.minX, maxX: s - 1, minY: cellInfo.minY, maxY: cellInfo.maxY };
-          const b2 = { minX: s + 1, maxX: cellInfo.maxX, minY: cellInfo.minY, maxY: cellInfo.maxY };
-
-          const t1 = this.create28x28Tensor(cellInfo, b1);
-          const t2 = this.create28x28Tensor(cellInfo, b2);
-
-          const r1 = await this.classifyDigit(t1);
-          const r2 = await this.classifyDigit(t2);
-
-          const candVal = `${r1.digit}${r2.digit}`;
-          const prod = r1.confidence * r2.confidence;
-
-          // If this split matches expected total calculated from column questions
-          if (expectedTotal && parseFloat(candVal) === Math.round(expectedTotal)) {
-            valStr = candVal;
-            numVal = parseFloat(valStr) || 0.0;
-            avgConf = Math.max(0.95, (r1.confidence + r2.confidence) / 2);
-            matchedExpected = true;
-            break;
-          }
-
-          if (prod > bestProd) {
-            bestProd = prod;
-            bestCandidateVal = candVal;
-            bestCandidateConf = (r1.confidence + r2.confidence) / 2;
+        // If expectedTotal is a single digit (0..9) and single-res has a viable candidate matching expectedTotal:
+        if (expectedTotal && Math.round(expectedTotal) <= 9 && digitBoxes.length <= 1) {
+          const expD = Math.round(expectedTotal);
+          const fullBox = { minX: cellInfo.minX, maxX: cellInfo.maxX, minY: cellInfo.minY, maxY: cellInfo.maxY };
+          const tensorData = this.create28x28Tensor(cellInfo, fullBox);
+          const singleRes = await this.classifyDigit(tensorData);
+          if (singleRes.probs && singleRes.probs[expD] >= 0.15) {
+            valStr = String(expD);
+            numVal = expD;
+            avgConf = Math.max(0.95, singleRes.probs[expD]);
           }
         }
 
-        if (!matchedExpected && bestProd > 0.4) {
-          valStr = bestCandidateVal;
-          numVal = parseFloat(valStr) || 0.0;
-          avgConf = bestCandidateConf;
+        // Check if single digit already matches expectedTotal or is high-confidence single digit
+        const matchesExpectedSingle = expectedTotal && parseFloat(valStr) === Math.round(expectedTotal);
+        if (matchesExpectedSingle) {
+          avgConf = Math.max(0.95, avgConf);
+          numVal = parseFloat(valStr);
+        }
+
+        const isConfidentSingle = (!isLikelyTwoDigits && avgConf >= 0.70) || matchesExpectedSingle;
+
+        if (!isConfidentSingle && isLikelyTwoDigits) {
+          let bestScore = -1;
+          let bestCandidateVal = valStr;
+          let bestCandidateConf = avgConf;
+          let matchedExpected = false;
+
+          const startS = Math.max(cellInfo.minX + 6, Math.round(cellInfo.minX + cellInfo.rw * 0.28));
+          const endS = Math.min(cellInfo.maxX - 6, Math.round(cellInfo.minX + cellInfo.rw * 0.72));
+
+          for (let s = startS; s <= endS; s++) {
+            const b1 = { minX: cellInfo.minX, maxX: s - 1, minY: cellInfo.minY, maxY: cellInfo.maxY };
+            const b2 = { minX: s + 1, maxX: cellInfo.maxX, minY: cellInfo.minY, maxY: cellInfo.maxY };
+
+            const t1 = this.create28x28Tensor(cellInfo, b1);
+            const t2 = this.create28x28Tensor(cellInfo, b2);
+
+            const r1 = await this.classifyDigit(t1);
+            const r2 = await this.classifyDigit(t2);
+
+            const candVal = `${r1.digit}${r2.digit}`;
+            const num = parseFloat(candVal);
+            if (num < 0 || num > 35) continue;
+
+            const prod = r1.confidence * r2.confidence;
+            const diff = expectedTotal ? Math.abs(num - expectedTotal) : 0;
+            const bonus = diff === 0 ? 3.5 : (diff <= 1 ? 2.0 : 1.0 / (1.0 + 0.3 * diff));
+            const score = prod * bonus;
+
+            // If this split matches expected total calculated from column questions
+            if (expectedTotal && num === Math.round(expectedTotal)) {
+              valStr = candVal;
+              numVal = num;
+              avgConf = Math.max(0.95, (r1.confidence + r2.confidence) / 2);
+              matchedExpected = true;
+              break;
+            }
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestCandidateVal = candVal;
+              bestCandidateConf = (r1.confidence + r2.confidence) / 2;
+            }
+          }
+
+          if (!matchedExpected && bestScore > 0.15) {
+            valStr = bestCandidateVal;
+            numVal = parseFloat(valStr) || 0.0;
+            avgConf = bestCandidateConf;
+          }
         }
       }
 
@@ -1031,9 +1116,9 @@
       let selectedIAs = [];
       if (targetClean.includes('ALL')) {
         selectedIAs = ['IA 1', 'IA 2', 'IA 3'];
-      } else if (targetClean.includes('IA 2')) {
+      } else if (targetClean.includes('IA 2') || targetClean.includes('SECOND') || targetClean === '2') {
         selectedIAs = ['IA 2'];
-      } else if (targetClean.includes('IA 3')) {
+      } else if (targetClean.includes('IA 3') || targetClean.includes('THIRD') || targetClean === '3') {
         selectedIAs = ['IA 3'];
       } else {
         selectedIAs = ['IA 1'];
@@ -1059,12 +1144,13 @@
         let detectedTotal = null;
 
         for (const row of DOM_ROWS) {
+          const padBottom = row.id === 'total' ? 6 : 4;
           const cellCanvas = this.cropCanvas(
             rectified,
-            marksX[0] + 6,
-            row.y1 + 5,
-            marksX[1] - marksX[0] - 12,
-            row.y2 - row.y1 - 10
+            marksX[0] + 5,
+            row.y1 + 2,
+            marksX[1] - marksX[0] - 10,
+            row.y2 - row.y1 - padBottom
           );
 
           const markRes = await this.recognizeCell(cellCanvas, row.max, row, calcSum);

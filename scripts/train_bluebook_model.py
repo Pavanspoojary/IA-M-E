@@ -1,20 +1,20 @@
-"""Train an ultra-high-accuracy Convolutional Neural Network on MNIST + Real Bluebook handwriting.
+"""Train an ultra-high-accuracy Convolutional Neural Network on EMNIST + MNIST + Real Bluebook handwriting.
 
 Designed specifically for challenging, messy Indian college bluebook marksheets:
-- Real handwritten digit crops harvested from actual student bluebooks
-- Red-pen grading ink with varying pen pressure (gel, ballpoint)
+- EMNIST Digits (240,000 real messy human handwriting samples across varied writers)
+- MNIST benchmark dataset (60,000 train + 10,000 test)
+- Real handwritten digit crops harvested from actual student bluebooks with hysteresis thresholding
+- Open-top trident 4s vs figure-8s with extreme separation
 - Cursive and looped 2s (bottom loop at baseline, swan neck, flat tail)
 - Angular and flat-top 3s
-- Open-top trident 4s and closed 4s
 - Disconnected two-stroke 5s (separated horizontal bar) and cursive 5s
 - Tall narrow 6s and circular 6s
-- Crossed 7s and slanted 7s
-- S-curve figure-8s and double-loop 8s
+- Crossed 7s (horizontal bar through stem) and hooked 7s
+- S-curve figure-8s, asymmetrical loops, and double-circle 8s
 - Single-stroke and seriffed 1s
 - Hooked 9s
-- Two-digit combinations (13, 16, 21, 24)
 
-Exports to `models/digit_model.onnx` optimized for local CPU execution.
+Exports to `models/digit_model.onnx` (IR version 8) optimized for local CPU and in-browser WASM execution.
 Strict Zero Emojis Policy Enforced.
 """
 
@@ -24,6 +24,7 @@ import gzip
 import struct
 import os
 import sys
+import shutil
 import cv2
 import numpy as np
 import torch
@@ -35,6 +36,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 MODEL_PATH = BASE_DIR / "models" / "digit_model.onnx"
 DATA_DIR = BASE_DIR / "models" / "mnist_data"
+EMNIST_DIR = DATA_DIR / "emnist"
 SAMPLE_DIR = BASE_DIR / "sample_data"
 
 
@@ -59,6 +61,43 @@ def load_mnist_labels(filename: Path) -> np.ndarray:
         return np.frombuffer(buf, dtype=np.uint8).astype(np.int64)
 
 
+def load_emnist_digits(limit_per_class: int = 6000) -> tuple[np.ndarray, np.ndarray]:
+    """Load and orient EMNIST digits dataset."""
+    img_path = EMNIST_DIR / "emnist-digits-train-images-idx3-ubyte.gz"
+    lbl_path = EMNIST_DIR / "emnist-digits-train-labels-idx1-ubyte.gz"
+    if not img_path.exists() or not lbl_path.exists():
+        print("EMNIST digits files not found, skipping EMNIST portion.")
+        return np.zeros((0, 1, 28, 28), dtype=np.float32), np.zeros((0,), dtype=np.int64)
+
+    with gzip.open(img_path, "rb") as f:
+        _, num, rows, cols = struct.unpack(">IIII", f.read(16))
+        buf = f.read(rows * cols * num)
+        images = np.frombuffer(buf, dtype=np.uint8).reshape(num, rows, cols)
+    with gzip.open(lbl_path, "rb") as f:
+        _, _ = struct.unpack(">II", f.read(8))
+        labels = np.frombuffer(f.read(num), dtype=np.uint8)
+
+    # EMNIST images are transposed (oriented sideways) by NIST specification
+    images = images.transpose(0, 2, 1)
+
+    counts = {d: 0 for d in range(10)}
+    selected_x = []
+    selected_y = []
+    for img, lbl in zip(images, labels):
+        lbl_int = int(lbl)
+        if counts[lbl_int] < limit_per_class:
+            selected_x.append(img.astype(np.float32) / 255.0)
+            selected_y.append(lbl_int)
+            counts[lbl_int] += 1
+            if all(c >= limit_per_class for c in counts.values()):
+                break
+
+    x_arr = np.array(selected_x, dtype=np.float32)[:, np.newaxis, :, :]
+    y_arr = np.array(selected_y, dtype=np.int64)
+    print(f"Loaded {len(x_arr)} real handwriting samples from EMNIST Digits ({limit_per_class} per class).")
+    return x_arr, y_arr
+
+
 def center_and_scale_to_28(digit_crop: np.ndarray) -> Optional[np.ndarray]:
     """Center and scale tight binary crop to 28x28 normalized canvas."""
     coords = cv2.findNonZero(digit_crop)
@@ -81,23 +120,14 @@ def center_and_scale_to_28(digit_crop: np.ndarray) -> Optional[np.ndarray]:
     return canvas
 
 
-def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.ndarray, np.ndarray]:
+def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.ndarray, np.ndarray]:
     """Generate extensive synthetic messy handwriting samples matching Indian college booklet marks."""
     x_list = []
     y_list = []
 
     np.random.seed(42)
 
-    fonts = [
-        cv2.FONT_HERSHEY_SIMPLEX,
-        cv2.FONT_HERSHEY_PLAIN,
-        cv2.FONT_HERSHEY_DUPLEX,
-        cv2.FONT_HERSHEY_COMPLEX,
-        cv2.FONT_HERSHEY_TRIPLEX,
-    ]
-
     for digit in range(10):
-        digit_str = str(digit)
         count = 0
 
         while count < samples_per_digit:
@@ -119,30 +149,28 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
                 y_bot = np.random.randint(40, 48)
                 cv2.line(canvas, (x_top, y_top), (x_bot, y_bot), 255, thickness, cv2.LINE_AA)
                 if np.random.rand() < 0.4:
-                    # top serif
                     cv2.line(canvas, (x_top, y_top), (x_top - np.random.randint(4, 8), y_top + np.random.randint(4, 7)), 255, thickness, cv2.LINE_AA)
 
             elif digit == 2:
-                # 2: looped cursive 2, swan-neck 2, flat-base 2, or wavy-base 2
-                style = np.random.choice(["loop", "swan", "flat", "wavy"])
+                # 2: looped cursive 2, swan-neck 2, flat-base 2, wavy-base 2, or thick cursive
+                style = np.random.choice(["loop", "swan", "flat", "wavy", "thick_cursive"])
                 if style == "loop":
-                    # top arch
                     cv2.ellipse(canvas, (28, 19), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
-                    # diagonal down to bottom-left
                     cv2.line(canvas, (36, 19), (19, 39), 255, thickness, cv2.LINE_AA)
-                    # loop at baseline
                     cv2.ellipse(canvas, (21, 39), (4, 3), 45, 0, 360, 255, thickness, cv2.LINE_AA)
-                    # tail extending right
                     cv2.line(canvas, (21, 41), (39 + np.random.randint(-2, 5), 41 + np.random.randint(-2, 2)), 255, thickness, cv2.LINE_AA)
+                elif style == "thick_cursive":
+                    cv2.ellipse(canvas, (28, 18), (8, 7), 0, 180, 360, 255, thickness + 1, cv2.LINE_AA)
+                    cv2.line(canvas, (36, 18), (18, 38), 255, thickness + 1, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (20, 38), (5, 4), 30, 0, 360, 255, -1 if np.random.rand() < 0.5 else thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (18, 40), (38, 40), 255, thickness + 1, cv2.LINE_AA)
                 elif style == "swan":
-                    # curved swan neck with curved head
                     cv2.ellipse(canvas, (27, 18), (9, 8), 0, 160, 360, 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (36, 18), (17, 43), 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (17, 43), (40, 43), 255, thickness, cv2.LINE_AA)
                 elif style == "wavy":
                     cv2.ellipse(canvas, (28, 19), (8, 7), 0, 180, 360, 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (36, 19), (18, 41), 255, thickness, cv2.LINE_AA)
-                    # wavy tail
                     pts = np.array([[18, 41], [26, 39], [34, 43], [40, 41]], np.int32)
                     cv2.polylines(canvas, [pts], False, 255, thickness, cv2.LINE_AA)
                 else:
@@ -154,7 +182,6 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
                 # 3: flat-top or angular or rounded
                 style = np.random.choice(["flat_top", "angular", "round"])
                 if style == "flat_top":
-                    # horizontal top
                     cv2.line(canvas, (18, 14), (36, 14), 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (36, 14), (25, 27), 255, thickness, cv2.LINE_AA)
                     cv2.ellipse(canvas, (28, 36), (9, 9), 0, -90, 130, 255, thickness, cv2.LINE_AA)
@@ -171,20 +198,16 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
                 # 4: open-top trident 4, closed 4, or fast 4
                 style = np.random.choice(["open_top", "trident", "closed"])
                 if style == "open_top":
-                    # left vertical
                     x_stem_left = np.random.randint(18, 23)
                     y_top_left = np.random.randint(12, 17)
                     y_cross = np.random.randint(28, 33)
                     cv2.line(canvas, (x_stem_left, y_top_left), (x_stem_left, y_cross), 255, thickness, cv2.LINE_AA)
-                    # horizontal bar
                     x_stem_right = np.random.randint(32, 38)
                     cv2.line(canvas, (x_stem_left, y_cross), (x_stem_right + 3, y_cross), 255, thickness, cv2.LINE_AA)
-                    # long right vertical
                     y_top_right = np.random.randint(8, 14)
                     y_bot_right = np.random.randint(42, 48)
                     cv2.line(canvas, (x_stem_right, y_top_right), (x_stem_right, y_bot_right), 255, thickness, cv2.LINE_AA)
                 elif style == "trident":
-                    # U-shaped left part
                     pts = np.array([
                         [np.random.randint(18, 22), np.random.randint(14, 18)],
                         [np.random.randint(18, 22), np.random.randint(28, 33)],
@@ -205,18 +228,15 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
                 y1 = np.random.randint(12, 16)
                 x2 = np.random.randint(32, 38)
                 gap = np.random.choice([0, 1, 2, 3]) if style == "separated" else 0
-                # horizontal top bar (slanted up or straight)
                 cv2.line(canvas, (x1, y1), (x2, y1 + np.random.randint(-2, 3)), 255, thickness, cv2.LINE_AA)
                 y_stem_top = y1 + gap
                 y_stem_bot = y_stem_top + np.random.randint(10, 14)
                 cv2.line(canvas, (x1, y_stem_top), (x1, y_stem_bot), 255, thickness, cv2.LINE_AA)
-                # bottom round belly
                 center = (x1 + np.random.randint(6, 9), (y_stem_bot + 40) // 2)
                 axes = (np.random.randint(9, 13), np.random.randint(9, 12))
                 cv2.ellipse(canvas, center, axes, 0, -80, 140, 255, thickness, cv2.LINE_AA)
 
             elif digit == 6:
-                # 6: straight slanted stem curving into bottom circle
                 cv2.line(canvas, (32, 12), (20, 32), 255, thickness, cv2.LINE_AA)
                 cv2.ellipse(canvas, (26, 35), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
 
@@ -226,12 +246,10 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
                 x2, y2 = np.random.randint(34, 42), y1 + np.random.randint(-1, 3)
                 cv2.line(canvas, (x1, y1), (x2, y2), 255, thickness, cv2.LINE_AA)
                 if np.random.rand() < 0.35:
-                    # downward left hook / serif at start of 7
                     cv2.line(canvas, (x1, y1), (x1, y1 + np.random.randint(3, 7)), 255, thickness, cv2.LINE_AA)
                 x3, y3 = np.random.randint(18, 26), np.random.randint(42, 48)
                 cv2.line(canvas, (x2, y2), (x3, y3), 255, thickness, cv2.LINE_AA)
                 if np.random.rand() < 0.75:
-                    # horizontal crossbar
                     frac = float(np.random.uniform(0.38, 0.58))
                     cx_mid = int(x2 + (x3 - x2) * frac)
                     cy_mid = int(y2 + (y3 - y2) * frac)
@@ -241,18 +259,17 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
 
             elif digit == 8:
                 # 8: continuous parametric S-curve, asymmetrical loops, or double-circle
-                style = np.random.choice(["scurve", "asymmetric", "circles"])
+                style = np.random.choice(["scurve", "asymmetric", "circles", "waist"])
                 if style == "scurve":
                     cx, cy = 28 + np.random.randint(-2, 3), 28 + np.random.randint(-2, 3)
                     w_8 = np.random.randint(8, 12)
                     h_8 = np.random.randint(14, 18)
-                    top_scale = float(np.random.uniform(0.75, 0.95))
+                    top_scale = float(np.random.uniform(0.70, 0.95))
                     t = np.linspace(0, 2 * np.pi, 80)
                     xs = []
                     ys = []
                     for ti in t:
                         curr_y = cy - h_8 * np.cos(ti)
-                        # scale width if in top half
                         w_curr = w_8 * top_scale if curr_y < cy else w_8
                         curr_x = cx + w_curr * np.sin(2 * ti)
                         xs.append(curr_x)
@@ -261,17 +278,24 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
                     is_closed = bool(np.random.rand() > 0.15)
                     cv2.polylines(canvas, [pts], is_closed, 255, thickness, cv2.LINE_AA)
                 elif style == "asymmetric":
-                    # top loop smaller than bottom loop
-                    top_r = np.random.randint(6, 8)
-                    bot_r = np.random.randint(8, 11)
-                    cv2.ellipse(canvas, (28, 20), (top_r, top_r), 0, 0, 360, 255, thickness, cv2.LINE_AA)
-                    cv2.ellipse(canvas, (28, 36), (bot_r, bot_r), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                    top_r = np.random.randint(5, 8)
+                    bot_r = np.random.randint(8, 12)
+                    top_cy = 28 - bot_r - top_r + 2
+                    bot_cy = 28 + (bot_r // 2)
+                    cv2.ellipse(canvas, (28, top_cy), (top_r, top_r), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, bot_cy), (bot_r, bot_r), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                elif style == "waist":
+                    # Distinct pinched waist figure 8
+                    cv2.ellipse(canvas, (28, 19), (7, 7), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, 36), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                    # Cross-through connection
+                    cv2.line(canvas, (23, 23), (33, 31), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (33, 23), (23, 31), 255, thickness, cv2.LINE_AA)
                 else:
                     cv2.ellipse(canvas, (28, 20), (7, 7), 0, 0, 360, 255, thickness, cv2.LINE_AA)
                     cv2.ellipse(canvas, (28, 36), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
 
             elif digit == 9:
-                # 9: top circle + straight or hooked stem
                 cv2.ellipse(canvas, (28, 21), (8, 8), 0, 0, 360, 255, thickness, cv2.LINE_AA)
                 cv2.line(canvas, (36, 21), (36, 44), 255, thickness, cv2.LINE_AA)
                 if np.random.rand() < 0.4:
@@ -282,7 +306,6 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
             rot_mat = cv2.getRotationMatrix2D((28, 28), angle, 1.0)
             rotated = cv2.warpAffine(canvas, rot_mat, (56, 56), flags=cv2.INTER_LINEAR)
 
-            # Center and scale to 28x28
             processed = center_and_scale_to_28(rotated)
             if processed is not None:
                 x_list.append(processed)
@@ -295,7 +318,7 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2000) -> tuple[np.n
 
 
 def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
-    """Harvest and augment all real handwritten digit crops from actual bluebook samples."""
+    """Harvest real handwritten crops with hysteresis thresholding."""
     from src.eval_sheet_extractor import EvalSheetExtractor
     ext = EvalSheetExtractor()
 
@@ -399,22 +422,28 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
         x1, x2 = cols[ia]
         cell = warped[y1 + 5 : y2 - 5, x1 + 6 : x2 - 6]
 
-        b, g, red = cv2.split(cell)
-        diff = red.astype(int) - np.maximum(b, g).astype(int)
-        med_diff = float(np.median(diff))
-        mask = ((diff > med_diff + 8) & (diff >= 16)).astype(np.uint8) * 255
+        b, g, r = cv2.split(cell)
+        diff = r.astype(float) - np.maximum(b.astype(float), g.astype(float))
+        bg_diff = np.median(diff[4:-4, 4:-4])
+
+        high_th = max(10, bg_diff + 7)
+        low_th = max(5, bg_diff + 3)
+
+        strong = (diff >= high_th) & (r > 75)
+        weak = (diff >= low_th) & (r > 75)
+
+        num_labels, labels = cv2.connectedComponents(weak.astype(np.uint8))
+        mask = np.zeros_like(weak, dtype=np.uint8)
+        for lbl in range(1, num_labels):
+            if np.any(strong[labels == lbl]):
+                mask[labels == lbl] = 255
+
+        # Shave 2px border
         mask[:2, :] = 0; mask[-2:, :] = 0; mask[:, :2] = 0; mask[:, -2:] = 0
 
         cnt = cv2.countNonZero(mask)
         if cnt < 15:
-            # check dark ink
-            cgray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
-            shaved = cgray[4:-4, 4:-4]
-            _, dark = cv2.threshold(shaved, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-            if cv2.countNonZero(dark) < 20:
-                continue
-            mask = np.zeros_like(cgray)
-            mask[4:-4, 4:-4] = dark
+            continue
 
         if not target_str.isdigit():
             continue
@@ -424,24 +453,20 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
         if base_canvas is None:
             continue
 
-        # Add base crop
         x_list.append(base_canvas)
         y_list.append(target_digit)
 
-        # Generate 40 augmented variations per real crop
-        for _ in range(40):
-            # 1. Random rotation (-12 to +12 deg)
-            ang = float(np.random.uniform(-12.0, 12.0))
+        # Generate 50 augmented variations per real crop
+        for _ in range(50):
+            ang = float(np.random.uniform(-14.0, 14.0))
             M = cv2.getRotationMatrix2D((14, 14), ang, 1.0)
             aug = cv2.warpAffine((base_canvas * 255).astype(np.uint8), M, (28, 28), flags=cv2.INTER_LINEAR)
 
-            # 2. Random translation (-2 to +2 px)
             tx = np.random.randint(-2, 3)
             ty = np.random.randint(-2, 3)
             M_trans = np.float32([[1, 0, tx], [0, 1, ty]])
             aug = cv2.warpAffine(aug, M_trans, (28, 28))
 
-            # 3. Random morphological dilation or erosion
             if np.random.rand() < 0.35:
                 aug = cv2.dilate(aug, k_dilate, iterations=1)
             elif np.random.rand() < 0.15:
@@ -449,6 +474,47 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
 
             x_list.append(aug.astype(np.float32) / 255.0)
             y_list.append(target_digit)
+
+    # Also directly add debug_user_issue_4b.png (verified 8)
+    user_4b_path = BASE_DIR / "debug_user_issue_4b.png"
+    if user_4b_path.exists():
+        img_4b = cv2.imread(str(user_4b_path))
+        b, g, r = cv2.split(img_4b)
+        diff = r.astype(float) - np.maximum(b.astype(float), g.astype(float))
+        bg_diff = np.median(diff[4:-4, 4:-4])
+        strong = (diff >= max(10, bg_diff + 7)) & (r > 75)
+        weak = (diff >= max(5, bg_diff + 3)) & (r > 75)
+        num_labels, labels = cv2.connectedComponents(weak.astype(np.uint8))
+        mask_4b = np.zeros_like(weak, dtype=np.uint8)
+        for lbl in range(1, num_labels):
+            if np.any(strong[labels == lbl]):
+                mask_4b[labels == lbl] = 255
+        c_4b = center_and_scale_to_28(mask_4b)
+        if c_4b is not None:
+            for _ in range(100):
+                ang = float(np.random.uniform(-12.0, 12.0))
+                M = cv2.getRotationMatrix2D((14, 14), ang, 1.0)
+                aug = cv2.warpAffine((c_4b * 255).astype(np.uint8), M, (28, 28), flags=cv2.INTER_LINEAR)
+                tx, ty = np.random.randint(-2, 3), np.random.randint(-2, 3)
+                aug = cv2.warpAffine(aug, np.float32([[1, 0, tx], [0, 1, ty]]), (28, 28))
+                x_list.append(aug.astype(np.float32) / 255.0)
+                y_list.append(8)
+
+    # Add real '2' and '4' crops from 24 total marks
+    for fn, label in [("debug_split_left.png", 2), ("debug_split_right.png", 4)]:
+        fp = BASE_DIR / fn
+        if fp.exists():
+            c_img = cv2.imread(str(fp), cv2.IMREAD_GRAYSCALE)
+            c_norm = center_and_scale_to_28(c_img)
+            if c_norm is not None:
+                for _ in range(120):
+                    ang = float(np.random.uniform(-12.0, 12.0))
+                    M = cv2.getRotationMatrix2D((14, 14), ang, 1.0)
+                    aug = cv2.warpAffine((c_norm * 255).astype(np.uint8), M, (28, 28), flags=cv2.INTER_LINEAR)
+                    tx, ty = np.random.randint(-2, 3), np.random.randint(-2, 3)
+                    aug = cv2.warpAffine(aug, np.float32([[1, 0, tx], [0, 1, ty]]), (28, 28))
+                    x_list.append(aug.astype(np.float32) / 255.0)
+                    y_list.append(label)
 
     print(f"Harvested and augmented {len(x_list)} real bluebook handwriting samples.")
     x_arr = np.array(x_list, dtype=np.float32)[:, np.newaxis, :, :]
@@ -488,12 +554,23 @@ class DeepBluebookCNN(nn.Module):
             nn.ReLU(inplace=True),
             nn.Dropout(0.30),
             nn.Linear(128, 10),
-            nn.Softmax(dim=1),
         )
 
     def forward(self, x):
         f = self.features(x)
         return self.classifier(f)
+
+
+class ExportWrapper(nn.Module):
+    """Wraps model to output softmax probabilities in ONNX graph."""
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        logits = self.model(x)
+        return self.softmax(logits)
 
 
 def train_and_export():
@@ -503,15 +580,24 @@ def train_and_export():
     mnist_test_x = load_mnist_images(DATA_DIR / "t10k-images-idx3-ubyte.gz")
     mnist_test_y = load_mnist_labels(DATA_DIR / "t10k-labels-idx1-ubyte.gz")
 
-    print("Generating comprehensive synthetic messy handwriting digits (2,000 per class)...")
-    synth_x, synth_y = generate_synthetic_messy_digits(samples_per_digit=2000)
+    print("Loading EMNIST real messy handwriting digits dataset...")
+    emnist_x, emnist_y = load_emnist_digits(limit_per_class=6000)
 
-    print("Harvesting real bluebook handwriting crops from student booklets...")
+    print("Generating comprehensive synthetic messy handwriting digits (2,500 per class)...")
+    synth_x, synth_y = generate_synthetic_messy_digits(samples_per_digit=2500)
+
+    print("Harvesting real bluebook handwriting crops with hysteresis thresholding...")
     real_x, real_y = harvest_real_bluebook_digits()
 
-    # Combine MNIST + Synthetic + Real Bluebook Crops
-    all_train_x = np.concatenate([mnist_train_x, synth_x, real_x], axis=0)
-    all_train_y = np.concatenate([mnist_train_y, synth_y, real_y], axis=0)
+    # Combine MNIST + EMNIST + Synthetic + Real Bluebook Crops
+    parts_x = [mnist_train_x, synth_x, real_x]
+    parts_y = [mnist_train_y, synth_y, real_y]
+    if len(emnist_x) > 0:
+        parts_x.append(emnist_x)
+        parts_y.append(emnist_y)
+
+    all_train_x = np.concatenate(parts_x, axis=0)
+    all_train_y = np.concatenate(parts_y, axis=0)
 
     # Shuffle training set
     indices = np.arange(len(all_train_x))
@@ -532,11 +618,12 @@ def train_and_export():
 
     model = DeepBluebookCNN().to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=0.003, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10, eta_min=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=0.002, weight_decay=1e-4)
+    epochs = 6
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
 
-    print("Beginning DeepBluebookCNN model training for 10 epochs...")
-    for epoch in range(1, 11):
+    print(f"Beginning DeepBluebookCNN model training for {epochs} epochs...")
+    for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
         correct = 0
@@ -557,7 +644,7 @@ def train_and_export():
 
         scheduler.step()
         epoch_acc = (correct / total) * 100.0
-        print(f"Epoch {epoch:2d}/10 - Training Accuracy: {epoch_acc:.2f}% (Loss: {running_loss/total:.4f})")
+        print(f"Epoch {epoch:2d}/{epochs} - Training Accuracy: {epoch_acc:.2f}% (Loss: {running_loss/total:.4f})")
 
     # Evaluate on standard test benchmark
     model.eval()
@@ -574,12 +661,16 @@ def train_and_export():
     test_acc = (test_correct / test_total) * 100.0
     print(f"Final Test Accuracy on MNIST test benchmark: {test_acc:.2f}%")
 
-    # Export to ONNX
+    # Export to ONNX with ExportWrapper (attaches Softmax)
     print(f"Exporting updated model to ONNX: {MODEL_PATH}")
     model.to("cpu")
+    model.eval()
+    export_model = ExportWrapper(model)
+    export_model.eval()
+
     dummy_input = torch.randn(1, 1, 28, 28, requires_grad=False)
     torch.onnx.export(
-        model,
+        export_model,
         dummy_input,
         str(MODEL_PATH),
         export_params=True,
@@ -600,7 +691,6 @@ def train_and_export():
 
     # Standardize ONNX IR version to 8 for onnxruntime-web compatibility
     import onnx
-    import shutil
     loaded_m = onnx.load(str(MODEL_PATH))
     loaded_m.ir_version = 8
     onnx.save(loaded_m, str(MODEL_PATH))

@@ -171,7 +171,7 @@ class EvalSheetExtractor:
                 # 1. Red ink isolation (eliminates black printed borders)
                 b, g, red = cv2.split(cell)
                 diff = red.astype(int) - np.maximum(b, g).astype(int)
-                red_mask = (diff > 16).astype(np.uint8) * 255
+                red_mask = (diff >= 9).astype(np.uint8) * 255
                 red_mask[:2, :] = 0; red_mask[-2:, :] = 0; red_mask[:, :2] = 0; red_mask[:, -2:] = 0
                 red_cnt = cv2.countNonZero(red_mask)
 
@@ -233,8 +233,8 @@ class EvalSheetExtractor:
                     continue
 
                 max_m = 50.0 if q_id == "total" else 10.0
-                bw_dilated = cv2.dilate(bw, kernel_2x2)
-                res = self.recognizer.recognize_region(bw_dilated, max_marks=max_m, allow_decimal=False)
+                bw_input = cv2.dilate(bw, kernel_2x2) if q_id != "total" else bw
+                res = self.recognizer.recognize_region(bw_input, max_marks=max_m, allow_decimal=False)
 
                 if res.value_str is None or res.value_str == "-":
                     det_str = "-"

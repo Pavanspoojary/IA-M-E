@@ -31,5 +31,8 @@ Thumbs.db
 *.swo
 *~
 
-# Temporary run logs
+# Temporary run logs and debug outputs
 *.log
+debug_*.png
+debug_*.jpg
+models/mnist_data/

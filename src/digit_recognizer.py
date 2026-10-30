@@ -373,8 +373,10 @@ class DigitRecognizer:
         min_val = middle_proj[min_idx]
         split_x = start_col + min_idx
 
-        # If valley is sufficiently deep, split
-        if min_val <= max(2, int(h * 0.18)):
+        # If valley is sufficiently deep or component is wide (aspect >= 1.25)
+        aspect = w / float(max(1, h))
+        max_proj = float(np.max(proj)) if len(proj) > 0 else 1.0
+        if min_val <= max(2, int(h * 0.25)) or (aspect >= 1.25 and min_val <= max_proj * 0.75):
             box1 = (x, y, split_x, h)
             box2 = (x + split_x, y, w - split_x, h)
             return [box1, box2]
