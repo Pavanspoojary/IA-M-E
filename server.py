@@ -33,7 +33,7 @@ from src.eval_sheet_extractor import EvalSheetExtractor
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config" / "template.json"
 MODEL_PATH = BASE_DIR / "models" / "digit_model.onnx"
-WEB_DIR = BASE_DIR / "web"
+WEB_DIR = BASE_DIR / "public" if (BASE_DIR / "public").exists() else BASE_DIR / "web"
 SAMPLE_DIR = BASE_DIR / "sample_data"
 
 app = FastAPI(title="IA Bluebook Marks Extraction System")
