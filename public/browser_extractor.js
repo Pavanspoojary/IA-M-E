@@ -56,6 +56,45 @@
     }
 
     /**
+     * Ensure OpenCV.js runtime is fully initialized.
+     */
+    async ensureOpenCVReady() {
+      if (typeof cv !== 'undefined' && cv.Mat && cv.getPerspectiveTransform) {
+        return true;
+      }
+      if (typeof cv !== 'undefined') {
+        return new Promise((resolve) => {
+          let resolved = false;
+          const orig = cv['onRuntimeInitialized'];
+          cv['onRuntimeInitialized'] = () => {
+            if (typeof orig === 'function') orig();
+            if (!resolved) {
+              resolved = true;
+              resolve(true);
+            }
+          };
+          const interval = setInterval(() => {
+            if (typeof cv !== 'undefined' && cv.Mat && cv.getPerspectiveTransform) {
+              clearInterval(interval);
+              if (!resolved) {
+                resolved = true;
+                resolve(true);
+              }
+            }
+          }, 50);
+          setTimeout(() => {
+            clearInterval(interval);
+            if (!resolved) {
+              resolved = true;
+              resolve(false);
+            }
+          }, 4000);
+        });
+      }
+      return false;
+    }
+
+    /**
      * Initialize ONNX Runtime Web session.
      */
     async init() {
@@ -63,6 +102,9 @@
       if (this.initPromise) return this.initPromise;
 
       this.initPromise = (async () => {
+        // Initialize OpenCV.js
+        await this.ensureOpenCVReady();
+
         if (typeof ort === 'undefined') {
           console.error('onnxruntime-web is not loaded.');
           return false;
@@ -168,61 +210,231 @@
     }
 
     /**
-     * Detect and rectify marks distribution table to standard 600x780 canvas.
+     * Order 4 polygon points as [top-left, top-right, bottom-right, bottom-left].
      */
-    rectifyTable(sourceCanvas) {
+    orderPoints(pts) {
+      let tl = pts[0], br = pts[0], tr = pts[0], bl = pts[0];
+      let minSum = pts[0].x + pts[0].y;
+      let maxSum = pts[0].x + pts[0].y;
+      let minDiff = pts[0].y - pts[0].x;
+      let maxDiff = pts[0].y - pts[0].x;
+
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i];
+        const s = p.x + p.y;
+        const d = p.y - p.x;
+        if (s < minSum) {
+          minSum = s;
+          tl = p;
+        }
+        if (s > maxSum) {
+          maxSum = s;
+          br = p;
+        }
+        if (d < minDiff) {
+          minDiff = d;
+          tr = p;
+        }
+        if (d > maxDiff) {
+          maxDiff = d;
+          bl = p;
+        }
+      }
+      return [tl, tr, br, bl];
+    }
+
+    /**
+     * Perspective warp table using OpenCV.js 4-corner detection.
+     */
+    rectifyTableWithOpenCV(sourceCanvas) {
+      if (typeof cv === 'undefined' || !cv.Mat || !cv.getPerspectiveTransform) {
+        return null;
+      }
+      let src = null, small = null, gray = null, blur = null, thresh = null;
+      let contours = null, hierarchy = null, srcTri = null, dstTri = null, M = null, dst = null;
+
+      try {
+        src = cv.imread(sourceCanvas);
+        const origW = src.cols;
+        const origH = src.rows;
+
+        // Downscale for high-speed contour search if image is very large
+        const scale = Math.min(1.0, 1200.0 / Math.max(origW, origH));
+        let workMat = src;
+        if (scale < 0.99) {
+          small = new cv.Mat();
+          cv.resize(src, small, new cv.Size(Math.round(origW * scale), Math.round(origH * scale)), 0, 0, cv.INTER_AREA);
+          workMat = small;
+        }
+
+        const w = workMat.cols;
+        const h = workMat.rows;
+
+        gray = new cv.Mat();
+        cv.cvtColor(workMat, gray, cv.COLOR_RGBA2GRAY);
+        blur = new cv.Mat();
+        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+        thresh = new cv.Mat();
+        cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 15, 4);
+
+        contours = new cv.MatVector();
+        hierarchy = new cv.Mat();
+        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        let bestPts = null;
+        let maxArea = 0;
+        const minArea = w * h * 0.18;
+
+        // 1. Try 4-point polygon approximation
+        for (let i = 0; i < contours.size(); i++) {
+          const c = contours.get(i);
+          const area = cv.contourArea(c);
+          if (area > maxArea && area > minArea) {
+            const peri = cv.arcLength(c, true);
+            for (const eps of [0.02, 0.025, 0.03, 0.015]) {
+              const approx = new cv.Mat();
+              cv.approxPolyDP(c, approx, eps * peri, true);
+              if (approx.rows === 4) {
+                maxArea = area;
+                bestPts = [
+                  { x: approx.data32S[0] / scale, y: approx.data32S[1] / scale },
+                  { x: approx.data32S[2] / scale, y: approx.data32S[3] / scale },
+                  { x: approx.data32S[4] / scale, y: approx.data32S[5] / scale },
+                  { x: approx.data32S[6] / scale, y: approx.data32S[7] / scale },
+                ];
+                approx.delete();
+                break;
+              }
+              approx.delete();
+            }
+          }
+        }
+
+        // 2. Fallback to minAreaRect if no exact 4-vertex polygon
+        if (!bestPts) {
+          for (let i = 0; i < contours.size(); i++) {
+            const c = contours.get(i);
+            const area = cv.contourArea(c);
+            if (area > maxArea && area > minArea) {
+              const rotRect = cv.minAreaRect(c);
+              const pts = cv.RotatedRect.points(rotRect);
+              maxArea = area;
+              bestPts = [
+                { x: pts[0].x / scale, y: pts[0].y / scale },
+                { x: pts[1].x / scale, y: pts[1].y / scale },
+                { x: pts[2].x / scale, y: pts[2].y / scale },
+                { x: pts[3].x / scale, y: pts[3].y / scale },
+              ];
+            }
+          }
+        }
+
+        if (!bestPts) {
+          return null;
+        }
+
+        const ordered = this.orderPoints(bestPts);
+        const destW = 600;
+        const destH = 780;
+
+        srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+          ordered[0].x, ordered[0].y,
+          ordered[1].x, ordered[1].y,
+          ordered[2].x, ordered[2].y,
+          ordered[3].x, ordered[3].y,
+        ]);
+        dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+          0, 0,
+          destW - 1, 0,
+          destW - 1, destH - 1,
+          0, destH - 1,
+        ]);
+
+        M = cv.getPerspectiveTransform(srcTri, dstTri);
+        dst = new cv.Mat();
+        const dsize = new cv.Size(destW, destH);
+        cv.warpPerspective(src, dst, M, dsize);
+
+        const destCanvas = document.createElement('canvas');
+        destCanvas.width = destW;
+        destCanvas.height = destH;
+        cv.imshow(destCanvas, dst);
+
+        return destCanvas;
+      } catch (err) {
+        console.warn('OpenCV perspective rectification failed:', err);
+        return null;
+      } finally {
+        if (src) src.delete();
+        if (small) small.delete();
+        if (gray) gray.delete();
+        if (blur) blur.delete();
+        if (thresh) thresh.delete();
+        if (contours) contours.delete();
+        if (hierarchy) hierarchy.delete();
+        if (srcTri) srcTri.delete();
+        if (dstTri) dstTri.delete();
+        if (M) M.delete();
+        if (dst) dst.delete();
+      }
+    }
+
+    /**
+     * Pure JavaScript fallback for table boundary detection.
+     */
+    rectifyTablePureJS(sourceCanvas) {
       const srcW = sourceCanvas.width;
       const srcH = sourceCanvas.height;
       const srcCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
       const imgData = srcCtx.getImageData(0, 0, srcW, srcH);
       const data = imgData.data;
 
-      // Scan rows and columns for table borders
-      // VTU distribution tables occupy center ~80% width and ~60% height
       let minX = Math.round(srcW * 0.05);
       let maxX = Math.round(srcW * 0.95);
-      let minY = Math.round(srcH * 0.05);
+      let minY = Math.round(srcH * 0.12);
       let maxY = Math.round(srcH * 0.95);
 
-      // Detect dark grid lines (luminance < 120)
       const rowDarkCounts = new Int32Array(srcH);
       const colDarkCounts = new Int32Array(srcW);
 
-      for (let y = 0; y < srcH; y += 4) {
+      for (let y = 0; y < srcH; y += 3) {
         const rowOffset = y * srcW * 4;
-        for (let x = 0; x < srcW; x += 4) {
+        for (let x = 0; x < srcW; x += 3) {
           const idx = rowOffset + x * 4;
           const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-          if (lum < 110) {
+          if (lum < 105) {
             rowDarkCounts[y]++;
             colDarkCounts[x]++;
           }
         }
       }
 
-      // Find top/bottom table boundaries with dense horizontal lines
-      for (let y = Math.round(srcH * 0.05); y < Math.round(srcH * 0.4); y += 4) {
-        if (rowDarkCounts[y] > srcW * 0.1) {
-          minY = Math.max(0, y - 10);
-          break;
-        }
-      }
-      for (let y = Math.round(srcH * 0.95); y > Math.round(srcH * 0.6); y -= 4) {
-        if (rowDarkCounts[y] > srcW * 0.1) {
-          maxY = Math.min(srcH, y + 10);
+      const thresholdDark = (srcW / 3) * 0.35;
+      for (let y = Math.round(srcH * 0.12); y < Math.round(srcH * 0.45); y += 3) {
+        if (rowDarkCounts[y] > thresholdDark) {
+          minY = y;
           break;
         }
       }
 
-      for (let x = Math.round(srcW * 0.05); x < Math.round(srcW * 0.35); x += 4) {
-        if (colDarkCounts[x] > srcH * 0.08) {
-          minX = Math.max(0, x - 10);
+      for (let y = Math.round(srcH * 0.95); y > Math.round(srcH * 0.60); y -= 3) {
+        if (rowDarkCounts[y] > thresholdDark) {
+          maxY = y;
           break;
         }
       }
-      for (let x = Math.round(srcW * 0.95); x > Math.round(srcW * 0.65); x -= 4) {
-        if (colDarkCounts[x] > srcH * 0.08) {
-          maxX = Math.min(srcW, x + 10);
+
+      const thresholdCol = (srcH / 3) * 0.30;
+      for (let x = Math.round(srcW * 0.04); x < Math.round(srcW * 0.35); x += 3) {
+        if (colDarkCounts[x] > thresholdCol) {
+          minX = x;
+          break;
+        }
+      }
+
+      for (let x = Math.round(srcW * 0.96); x > Math.round(srcW * 0.65); x -= 3) {
+        if (colDarkCounts[x] > thresholdCol) {
+          maxX = x;
           break;
         }
       }
@@ -235,13 +447,29 @@
       destCanvas.height = 780;
       const destCtx = destCanvas.getContext('2d', { willReadFrequently: true });
 
-      if (tableW > srcW * 0.4 && tableH > srcH * 0.4) {
+      if (tableW > srcW * 0.45 && tableH > srcH * 0.40) {
         destCtx.drawImage(sourceCanvas, minX, minY, tableW, tableH, 0, 0, 600, 780);
       } else {
-        destCtx.drawImage(sourceCanvas, 0, 0, srcW, srcH, 0, 0, 600, 780);
+        const cropY = Math.round(srcH * 0.16);
+        const cropH = Math.round(srcH * 0.76);
+        const cropX = Math.round(srcW * 0.08);
+        const cropW = Math.round(srcW * 0.84);
+        destCtx.drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, 600, 780);
       }
 
       return destCanvas;
+    }
+
+    /**
+     * Detect and rectify marks distribution table to standard 600x780 canvas.
+     */
+    async rectifyTable(sourceCanvas) {
+      await this.ensureOpenCVReady();
+      const cvWarped = this.rectifyTableWithOpenCV(sourceCanvas);
+      if (cvWarped) {
+        return cvWarped;
+      }
+      return this.rectifyTablePureJS(sourceCanvas);
     }
 
     /**
@@ -276,7 +504,7 @@
         minY = h,
         maxY = -1;
 
-      // Scan inner region (shave 2px border to ignore table lines)
+      // Scan inner region (shave 3px border to ignore table lines)
       for (let y = 3; y < h - 3; y++) {
         const row = y * w;
         for (let x = 3; x < w - 3; x++) {
@@ -287,7 +515,7 @@
 
           // Red ink isolation: red channel significantly exceeds green and blue
           const diff = r - Math.max(g, b);
-          if (diff > 10) {
+          if (diff > 12 && r > 80) {
             mask[row + x] = 1;
             redCount++;
             if (x < minX) minX = x;
@@ -296,19 +524,19 @@
             if (y > maxY) maxY = y;
           } else {
             const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-            if (lum < 100) darkCount++;
+            if (lum < 95) darkCount++;
           }
         }
       }
 
       // If red ink is insufficient, check for dark pen ink
-      if (redCount < 20 && darkCount >= 30) {
+      if (redCount < 18 && darkCount >= 25) {
         for (let y = 4; y < h - 4; y++) {
           const row = y * w;
           for (let x = 4; x < w - 4; x++) {
             const idx = (row + x) * 4;
             const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (lum < 95) {
+            if (lum < 85) {
               mask[row + x] = 1;
               if (x < minX) minX = x;
               if (x > maxX) maxX = x;
@@ -319,9 +547,9 @@
         }
       }
 
-      const totalStrokes = redCount >= 20 ? redCount : darkCount;
+      const totalStrokes = redCount >= 18 ? redCount : darkCount;
 
-      if (totalStrokes < 18 || minX > maxX || minY > maxY) {
+      if (totalStrokes < 16 || minX > maxX || minY > maxY) {
         return { isBlank: true, isStrikeout: false, mask, minX, maxX, minY, maxY, w, h };
       }
 
@@ -329,9 +557,9 @@
       const rh = maxY - minY + 1;
       const ratio = rw / Math.max(1, rh);
 
-      // Strikeout detection rule (w/h >= 2.5 or flat horizontal line)
+      // Strikeout detection rule (w/h >= 2.2 or flat horizontal line)
       const isStrikeout =
-        ratio >= 2.5 || (rh <= 12 && rw >= 18) || (rw > w * 0.35 && rh <= 14);
+        ratio >= 2.2 || (rh <= 12 && rw >= 18) || (rw > w * 0.35 && rh <= 14);
 
       return {
         isBlank: false,
@@ -509,6 +737,7 @@
           confidence: 1.0,
           status: 'Blank',
           isBlank: true,
+          snippetCanvas: cellCanvas,
         };
       }
 
@@ -519,6 +748,7 @@
           confidence: 0.95,
           status: 'Valid',
           isBlank: false,
+          snippetCanvas: cellCanvas,
         };
       }
 
@@ -541,12 +771,22 @@
       const isValidRange = numVal >= 0 && numVal <= maxMarks;
       const status = avgConf >= 0.65 && isValidRange ? 'Valid' : 'Needs review';
 
+      // Create tight zoom snippet of handwritten stroke with 5px padding
+      const padX = 6;
+      const padY = 4;
+      const snipX = Math.max(0, cellInfo.minX - padX);
+      const snipY = Math.max(0, cellInfo.minY - padY);
+      const snipW = Math.min(cellCanvas.width - snipX, cellInfo.rw + padX * 2);
+      const snipH = Math.min(cellCanvas.height - snipY, cellInfo.rh + padY * 2);
+      const snippetCanvas = this.cropCanvas(cellCanvas, snipX, snipY, snipW, snipH);
+
       return {
         detectedStr: valStr,
         numericVal: numVal,
         confidence: Math.round(avgConf * 1000) / 1000,
         status,
         isBlank: false,
+        snippetCanvas,
       };
     }
 
@@ -556,7 +796,7 @@
     async extractFromCanvas(canvas, targetIA = 'ALL') {
       await this.init();
 
-      const rectified = this.rectifyTable(canvas);
+      const rectified = await this.rectifyTable(canvas);
 
       const targetClean = String(targetIA).trim().toUpperCase();
       let selectedIAs = [];
@@ -598,8 +838,8 @@
             row.y2 - row.y1 - 10
           );
 
-          const cellB64 = cellCanvas.toDataURL('image/png');
           const markRes = await this.recognizeCell(cellCanvas, row.max);
+          const cellB64 = (markRes.snippetCanvas || cellCanvas).toDataURL('image/png');
 
           if (row.id === 'total') {
             detectedTotal = markRes.isBlank ? null : markRes.numericVal;
