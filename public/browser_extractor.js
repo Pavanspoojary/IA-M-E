@@ -126,11 +126,14 @@
 
           for (const url of possibleUrls) {
             try {
-              session = await ort.InferenceSession.create(url, {
-                executionProviders: ['wasm'],
-              });
+              const resp = await fetch(url);
+              if (!resp.ok) continue;
+              const buffer = await resp.arrayBuffer();
+              if (!buffer || buffer.byteLength < 1000) continue;
+
+              session = await ort.InferenceSession.create(buffer);
               if (session) {
-                console.log(`ONNX digit model loaded successfully from ${url}`);
+                console.log(`ONNX digit model loaded successfully from ${url} (${buffer.byteLength} bytes)`);
                 break;
               }
             } catch (err) {
@@ -695,26 +698,39 @@
       const results = await this.session.run({ input: inputTensor });
       const output = results.output.data;
 
-      // Softmax
-      let maxLogit = -Infinity;
-      for (let i = 0; i < 10; i++) {
-        if (output[i] > maxLogit) maxLogit = output[i];
-      }
-
-      let expSum = 0;
-      const exps = new Float32Array(10);
-      for (let i = 0; i < 10; i++) {
-        exps[i] = Math.exp(output[i] - maxLogit);
-        expSum += exps[i];
-      }
+      // Check if output is already softmax probabilities
+      let sum = 0;
+      for (let i = 0; i < 10; i++) sum += output[i];
 
       let bestIdx = 0;
-      let bestProb = 0;
-      for (let i = 0; i < 10; i++) {
-        const p = exps[i] / expSum;
-        if (p > bestProb) {
-          bestProb = p;
-          bestIdx = i;
+      let bestProb = -Infinity;
+
+      if (Math.abs(sum - 1.0) < 0.05) {
+        // Output is already softmax probabilities
+        for (let i = 0; i < 10; i++) {
+          if (output[i] > bestProb) {
+            bestProb = output[i];
+            bestIdx = i;
+          }
+        }
+      } else {
+        // Logits: compute stable softmax
+        let maxLogit = -Infinity;
+        for (let i = 0; i < 10; i++) {
+          if (output[i] > maxLogit) maxLogit = output[i];
+        }
+        let expSum = 0;
+        const exps = new Float32Array(10);
+        for (let i = 0; i < 10; i++) {
+          exps[i] = Math.exp(output[i] - maxLogit);
+          expSum += exps[i];
+        }
+        for (let i = 0; i < 10; i++) {
+          const p = exps[i] / expSum;
+          if (p > bestProb) {
+            bestProb = p;
+            bestIdx = i;
+          }
         }
       }
 
