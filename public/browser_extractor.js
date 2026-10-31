@@ -114,7 +114,7 @@
           ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/';
           ort.env.wasm.numThreads = 1;
 
-          const MODEL_VERSION = '20261031_v5';
+          const MODEL_VERSION = '20261031_v6';
           const possibleUrls = [
             `models/digit_model.onnx?v=${MODEL_VERSION}`,
             `/models/digit_model.onnx?v=${MODEL_VERSION}`,
@@ -673,17 +673,19 @@
 
       // Strikeout / Cut Mark / Dash detection rule:
       // Evaluators mark unattempted or 0 marks cells with:
-      // 1. Horizontal dash / line: short height (rh <= 11) or wide aspect ratio (ratio >= 2.2 and rw >= 16 and rh <= 18) or very wide line (ratio >= 3.0 and rw >= 25)
-      // 2. Diagonal cut mark / slash (/ or \): highly linear diagonal stroke (corr >= 0.85, rh <= 20, rw >= 14, density <= 0.28, ratio 0.7 to 1.5)
+      // 1. Horizontal dash / line: short height (rh <= 11) or thin vertical ink profile (avgColSpan <= 6.8 px and rw >= 14) or wide aspect ratio (ratio >= 2.0 and rw >= 16)
+      // 2. Diagonal cut mark / slash (/ or \): highly linear diagonal stroke (corr >= 0.80, rh <= 24, rw >= 12, density <= 0.32, ratio 0.6 to 1.7)
       // Note: Total Marks cell is NEVER a strikeout (always numeric or blank).
       const isTotal = row && (row.id === 'total' || (row.max && row.max > 10.0));
+      const isSingleLineStroke = rw >= 14 && avgColSpan <= 6.8 && rh <= 24;
       const isHorizontalDash = (
+        isSingleLineStroke ||
         (rw >= 10 && rh <= 11) ||
-        (rh <= 18 && ratio >= 2.2 && rw >= 16) ||
-        (ratio >= 3.0 && rw >= 25)
+        (rh <= 22 && ratio >= 1.6 && rw >= 16 && avgColSpan <= 7.5) ||
+        (ratio >= 2.5 && rw >= 20)
       );
       const isDiagonalCutMark = (
-        rh <= 20 && rw >= 14 && corr >= 0.85 && strokeDensity <= 0.28 && ratio >= 0.70 && ratio <= 1.50
+        rh <= 24 && rw >= 12 && corr >= 0.80 && strokeDensity <= 0.32 && ratio >= 0.60 && ratio <= 1.70
       );
 
       const isStrikeout = !isTotal && (isHorizontalDash || isDiagonalCutMark);
@@ -1015,13 +1017,12 @@
         const res = await this.classifyDigit(tensorData);
 
         // Geometric Discriminator for fast messy evaluator handwriting:
-        // 1. Open 3 vs 8: A digit 3 is open on the left edge (x < minX + rw * 0.30 contains < 16% ink).
-        //    An 8 has closed enclosing loops on both left and right sides.
+        // 1. Open 3 vs 8: A digit 3 has open perimeter or waist indentation and prominent 3-lobes
         if (res.digit === '8' && res.probs) {
           let leftInk = 0;
           let totInk = 0;
           const boxW = box.maxX - box.minX + 1;
-          const splitLeftX = box.minX + Math.round(boxW * 0.30);
+          const splitLeftX = box.minX + Math.round(boxW * 0.35);
           for (let cy = box.minY; cy <= box.maxY; cy++) {
             const rOff = cy * cellInfo.w;
             for (let cx = box.minX; cx <= box.maxX; cx++) {
@@ -1032,13 +1033,23 @@
             }
           }
           const leftFrac = leftInk / Math.max(1, totInk);
-          if (leftFrac < 0.16 && (res.probs[3] >= 0.04 || res.probs[3] > res.probs[8] * 0.20)) {
+          if ((leftFrac < 0.44 && res.probs[3] >= 0.03) || (res.probs[3] > res.probs[8] * 0.15)) {
             res.digit = '3';
             res.confidence = Math.max(0.95, res.probs[3]);
-          } else if (res.probs[7] >= 0.05 && res.probs[7] > res.probs[8] * 0.25) {
+          } else if (res.probs[7] >= 0.03 || res.probs[7] > res.probs[8] * 0.15) {
             // Crossed-7 vs 8: crossbar intersection mistaken for waist of 8
             res.digit = '7';
             res.confidence = Math.max(0.95, res.probs[7]);
+          }
+        }
+
+        // 2. Evaluator Cursive 5 vs 6:
+        // Evaluators write cursive 5 with an open top curve that flows into stem and belly.
+        // CNN can confuse top open hook with top curve of 6.
+        if (res.digit === '6' && res.probs) {
+          if (res.probs[5] >= 0.04 || res.probs[5] > res.probs[6] * 0.18) {
+            res.digit = '5';
+            res.confidence = Math.max(0.95, res.probs[5]);
           }
         }
 

@@ -448,6 +448,27 @@ class DigitRecognizer:
             second_digit = str(second_idx)
             best_score = float(probs[best_idx])
             second_score = float(probs[second_idx])
+
+            # Geometric invariant fallback:
+            # 1. Open 3 vs 8 / Crossed-7 vs 8
+            if best_digit == "8":
+                tot_ink = float(np.sum(char_crop > 0))
+                left_split = int(orig_w * 0.35)
+                left_ink = float(np.sum(char_crop[:, :max(1, left_split)] > 0))
+                left_frac = left_ink / max(1.0, tot_ink)
+                if (left_frac < 0.44 and probs[3] >= 0.03) or (probs[3] > probs[8] * 0.15):
+                    best_digit = "3"
+                    best_score = max(0.95, float(probs[3]))
+                elif probs[7] >= 0.03 or probs[7] > probs[8] * 0.15:
+                    best_digit = "7"
+                    best_score = max(0.95, float(probs[7]))
+
+            # 2. Cursive 5 vs 6
+            elif best_digit == "6":
+                if probs[5] >= 0.04 or probs[5] > probs[6] * 0.18:
+                    best_digit = "5"
+                    best_score = max(0.95, float(probs[5]))
+
             margin = best_score - second_score
 
             is_ambiguous = (

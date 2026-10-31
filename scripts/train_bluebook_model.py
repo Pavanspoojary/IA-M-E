@@ -184,9 +184,18 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                     cv2.line(canvas, (18, 42), (38, 42), 255, thickness, cv2.LINE_AA)
 
             elif digit == 3:
-                # 3: flat-top, open cursive, looped waist, or sharp center
-                style = np.random.choice(["flat_top", "open_cursive", "loop_waist", "sharp_center", "slanted"])
-                if style == "flat_top":
+                # 3: flat-top, open cursive, looped waist, sharp center, evaluator open lobes
+                style = np.random.choice(["flat_top", "open_cursive", "loop_waist", "sharp_center", "evaluator_open", "slanted_open"], p=[0.15, 0.25, 0.15, 0.15, 0.15, 0.15])
+                if style == "evaluator_open":
+                    # Distinct evaluator 3: two open rounded lobes with a deep central tuck/waist
+                    cv2.ellipse(canvas, (26, 20), (8, 7), 0, -130, 110, 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (34, 20), (24, 28), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (24, 28), (35, 35), 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (27, 36), (9, 9), 0, -100, 125, 255, thickness, cv2.LINE_AA)
+                elif style == "slanted_open":
+                    cv2.ellipse(canvas, (29, 20), (8, 7), 15, -120, 110, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (27, 37), (10, 9), 10, -90, 130, 255, thickness, cv2.LINE_AA)
+                elif style == "flat_top":
                     cv2.line(canvas, (18, 14), (36, 14), 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (36, 14), (25, 27), 255, thickness, cv2.LINE_AA)
                     cv2.ellipse(canvas, (28, 36), (9, 9), 0, -90, 130, 255, thickness, cv2.LINE_AA)
@@ -236,19 +245,45 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                     cv2.line(canvas, (32, 10), (32, 46), 255, thickness, cv2.LINE_AA)
 
             elif digit == 5:
-                # 5: separated top stroke or cursive
-                style = np.random.choice(["separated", "attached", "slanted"])
-                x1 = np.random.randint(16, 20)
-                y1 = np.random.randint(12, 16)
-                x2 = np.random.randint(32, 38)
-                gap = np.random.choice([0, 1, 2, 3]) if style == "separated" else 0
-                cv2.line(canvas, (x1, y1), (x2, y1 + np.random.randint(-2, 3)), 255, thickness, cv2.LINE_AA)
-                y_stem_top = y1 + gap
-                y_stem_bot = y_stem_top + np.random.randint(10, 14)
-                cv2.line(canvas, (x1, y_stem_top), (x1, y_stem_bot), 255, thickness, cv2.LINE_AA)
-                center = (x1 + np.random.randint(6, 9), (y_stem_bot + 40) // 2)
-                axes = (np.random.randint(9, 13), np.random.randint(9, 12))
-                cv2.ellipse(canvas, center, axes, 0, -80, 140, 255, thickness, cv2.LINE_AA)
+                # 5: separated top stroke, continuous cursive single-stroke, attached, or floating bar
+                style = np.random.choice(["continuous_cursive", "floating_bar", "separated", "attached", "slanted"], p=[0.30, 0.25, 0.15, 0.15, 0.15])
+                if style == "continuous_cursive":
+                    # Single continuous stroke: top curved bar flowing down into stem and belly
+                    x_start = np.random.randint(32, 38)
+                    y_start = np.random.randint(11, 15)
+                    x_corner = np.random.randint(17, 21)
+                    y_corner = np.random.randint(12, 16)
+                    cv2.line(canvas, (x_start, y_start), (x_corner, y_corner), 255, thickness, cv2.LINE_AA)
+                    y_stem_bot = y_corner + np.random.randint(11, 15)
+                    cv2.line(canvas, (x_corner, y_corner), (x_corner, y_stem_bot), 255, thickness, cv2.LINE_AA)
+                    center = (x_corner + np.random.randint(7, 10), (y_stem_bot + 42) // 2)
+                    axes = (np.random.randint(9, 13), np.random.randint(9, 13))
+                    cv2.ellipse(canvas, center, axes, 0, -85, 135, 255, thickness, cv2.LINE_AA)
+                elif style == "floating_bar":
+                    # Distinct floating horizontal bar at top
+                    x1 = np.random.randint(16, 21)
+                    y1 = np.random.randint(10, 14)
+                    x2 = np.random.randint(33, 40)
+                    cv2.line(canvas, (x1, y1), (x2, y1 + np.random.randint(-2, 3)), 255, thickness, cv2.LINE_AA)
+                    stem_x = x1 + np.random.randint(0, 3)
+                    stem_y_top = y1 + np.random.randint(3, 7)
+                    stem_y_bot = stem_y_top + np.random.randint(10, 14)
+                    cv2.line(canvas, (stem_x, stem_y_top), (stem_x, stem_y_bot), 255, thickness, cv2.LINE_AA)
+                    center = (stem_x + np.random.randint(7, 10), (stem_y_bot + 42) // 2)
+                    axes = (np.random.randint(9, 13), np.random.randint(9, 12))
+                    cv2.ellipse(canvas, center, axes, 0, -80, 140, 255, thickness, cv2.LINE_AA)
+                else:
+                    x1 = np.random.randint(16, 20)
+                    y1 = np.random.randint(12, 16)
+                    x2 = np.random.randint(32, 38)
+                    gap = np.random.choice([0, 1, 2, 3]) if style == "separated" else 0
+                    cv2.line(canvas, (x1, y1), (x2, y1 + np.random.randint(-2, 3)), 255, thickness, cv2.LINE_AA)
+                    y_stem_top = y1 + gap
+                    y_stem_bot = y_stem_top + np.random.randint(10, 14)
+                    cv2.line(canvas, (x1, y_stem_top), (x1, y_stem_bot), 255, thickness, cv2.LINE_AA)
+                    center = (x1 + np.random.randint(6, 9), (y_stem_bot + 40) // 2)
+                    axes = (np.random.randint(9, 13), np.random.randint(9, 12))
+                    cv2.ellipse(canvas, center, axes, 0, -80, 140, 255, thickness, cv2.LINE_AA)
 
             elif digit == 6:
                 cv2.line(canvas, (32, 12), (20, 32), 255, thickness, cv2.LINE_AA)
@@ -498,17 +533,23 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
 
     # Direct injection and massive augmentation of user failure-case snippets
     direct_snippets = [
-        ("user_snip_1a.png", 7, 600),       # Crossed 7 misclassified as 8/4
-        ("user_snip_1b.png", 3, 600),       # Open curved 3 misclassified as 8
-        ("debug_user_total_2.png", 2, 500), # Left '2' of total 23
-        ("debug_user_total_3.png", 3, 500), # Right '3' of total 23
-        ("debug_sim_4b.png", 8, 500),       # Real figure-8 from test sheets
-        ("debug_cell_ia2_1a.png", 8, 500),  # Real figure-8
-        ("debug_cell_ia2_3b.png", 3, 500),  # Real open 3
-        ("debug_split47_l.png", 2, 400),    # Real 2 from total 24
-        ("debug_split47_r.png", 4, 400),    # Real 4 from total 24
-        ("debug_split_left.png", 2, 300),   # Left '2' from 24
-        ("debug_split_right.png", 4, 300),  # Right '4' from 24
+        ("user_fail_im1_crop_0.png", 5, 900), # Evaluator cursive 5 misclassified as 6
+        ("user_fail_im1_crop_1.png", 3, 900), # Evaluator open curved 3 misclassified as 8
+        ("user_fail_im3_crop_0.png", 7, 900), # Evaluator slanted crossed 7 misclassified as 8
+        ("user_fail_im3_crop_1.png", 3, 900), # Evaluator cursive 3 misclassified as 8
+        ("debug_fail_total_2.png", 2, 700),   # Evaluator total marks '2' in 23
+        ("debug_fail_total_3.png", 3, 700),   # Evaluator total marks '3' in 23
+        ("user_snip_1a.png", 7, 600),         # Crossed 7 misclassified as 8/4
+        ("user_snip_1b.png", 3, 600),         # Open curved 3 misclassified as 8
+        ("debug_user_total_2.png", 2, 500),   # Left '2' of total 23
+        ("debug_user_total_3.png", 3, 500),   # Right '3' of total 23
+        ("debug_sim_4b.png", 8, 500),         # Real figure-8 from test sheets
+        ("debug_cell_ia2_1a.png", 8, 500),    # Real figure-8
+        ("debug_cell_ia2_3b.png", 3, 500),    # Real open 3
+        ("debug_split47_l.png", 2, 400),      # Real 2 from total 24
+        ("debug_split47_r.png", 4, 400),      # Real 4 from total 24
+        ("debug_split_left.png", 2, 300),     # Left '2' from 24
+        ("debug_split_right.png", 4, 300),    # Right '4' from 24
     ]
 
     for fn, label, num_augs in direct_snippets:
