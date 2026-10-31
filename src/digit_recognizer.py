@@ -462,12 +462,21 @@ class DigitRecognizer:
                 elif probs[7] >= 0.03 or probs[7] > probs[8] * 0.15:
                     best_digit = "7"
                     best_score = max(0.95, float(probs[7]))
+                elif probs[5] >= 0.03 or probs[5] > probs[8] * 0.15:
+                    best_digit = "5"
+                    best_score = max(0.95, float(probs[5]))
 
             # 2. Cursive 5 vs 6
             elif best_digit == "6":
                 if probs[5] >= 0.04 or probs[5] > probs[6] * 0.18:
                     best_digit = "5"
                     best_score = max(0.95, float(probs[5]))
+
+            # 3. Open-top 4 vs 2
+            elif best_digit == "2":
+                if probs[4] >= 0.04 or probs[4] > probs[2] * 0.18:
+                    best_digit = "4"
+                    best_score = max(0.95, float(probs[4]))
 
             margin = best_score - second_score
 

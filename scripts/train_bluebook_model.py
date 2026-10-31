@@ -533,6 +533,9 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
 
     # Direct injection and massive augmentation of user failure-case snippets
     direct_snippets = [
+        ("user_fail_im2_box_0.png", 5, 1000), # Evaluator slanted detached 5 in 4.a
+        ("debug_fail_24_right4.png", 4, 1000), # Evaluator open-top 4 in Total 24
+        ("debug_fail_24_left2.png", 2, 800),   # Evaluator cursive 2 in Total 24
         ("user_fail_im1_crop_0.png", 5, 900), # Evaluator cursive 5 misclassified as 6
         ("user_fail_im1_crop_1.png", 3, 900), # Evaluator open curved 3 misclassified as 8
         ("user_fail_im3_crop_0.png", 7, 900), # Evaluator slanted crossed 7 misclassified as 8

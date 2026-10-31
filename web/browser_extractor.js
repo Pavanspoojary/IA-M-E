@@ -114,7 +114,7 @@
           ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/';
           ort.env.wasm.numThreads = 1;
 
-          const MODEL_VERSION = '20261031_v6';
+          const MODEL_VERSION = '20261031_v7';
           const possibleUrls = [
             `models/digit_model.onnx?v=${MODEL_VERSION}`,
             `/models/digit_model.onnx?v=${MODEL_VERSION}`,
@@ -1017,7 +1017,7 @@
         const res = await this.classifyDigit(tensorData);
 
         // Geometric Discriminator for fast messy evaluator handwriting:
-        // 1. Open 3 vs 8: A digit 3 has open perimeter or waist indentation and prominent 3-lobes
+        // 1. Open 3 vs 8, Crossed-7 vs 8, Detached 5 vs 8:
         if (res.digit === '8' && res.probs) {
           let leftInk = 0;
           let totInk = 0;
@@ -1040,6 +1040,10 @@
             // Crossed-7 vs 8: crossbar intersection mistaken for waist of 8
             res.digit = '7';
             res.confidence = Math.max(0.95, res.probs[7]);
+          } else if (res.probs[5] >= 0.03 || res.probs[5] > res.probs[8] * 0.15) {
+            // Evaluator 5 mistaken for 8: top stroke is horizontal/slanted bar and belly
+            res.digit = '5';
+            res.confidence = Math.max(0.95, res.probs[5]);
           }
         }
 
@@ -1050,6 +1054,30 @@
           if (res.probs[5] >= 0.04 || res.probs[5] > res.probs[6] * 0.18) {
             res.digit = '5';
             res.confidence = Math.max(0.95, res.probs[5]);
+          }
+        }
+
+        // 3. Evaluator Open-top 4 vs 2:
+        // In an open-top 4, top third has two vertical stems (left vertical stem, right vertical stem).
+        // A 2 has a single rounded arch at the top.
+        if (res.digit === '2' && res.probs && (res.probs[4] >= 0.04 || res.probs[4] > res.probs[2] * 0.18)) {
+          let rightTopInk = 0, leftTopInk = 0;
+          const boxW = box.maxX - box.minX + 1;
+          const boxH = box.maxY - box.minY + 1;
+          const topH = box.minY + Math.round(boxH * 0.35);
+          const midW = box.minX + Math.round(boxW * 0.5);
+          for (let cy = box.minY; cy <= topH; cy++) {
+            const rOff = cy * cellInfo.w;
+            for (let cx = box.minX; cx <= box.maxX; cx++) {
+              if (cellInfo.mask[rOff + cx]) {
+                if (cx >= midW) rightTopInk++;
+                else leftTopInk++;
+              }
+            }
+          }
+          if (rightTopInk >= 6 && leftTopInk >= 5) {
+            res.digit = '4';
+            res.confidence = Math.max(0.95, res.probs[4]);
           }
         }
 
@@ -1144,7 +1172,15 @@
               if ((lInk / Math.max(1, totI)) < 0.16 && r2.probs[3] >= 0.04) {
                 r2.digit = '3';
                 r2.confidence = Math.max(0.92, r2.probs[3]);
+              } else if (r2.probs[7] >= 0.04) {
+                r2.digit = '7';
+                r2.confidence = Math.max(0.92, r2.probs[7]);
               }
+            }
+
+            if (r2.digit === '2' && r2.probs && (r2.probs[4] >= 0.04 || r2.probs[4] > r2.probs[2] * 0.18)) {
+              r2.digit = '4';
+              r2.confidence = Math.max(0.92, r2.probs[4]);
             }
 
             const candVal = `${r1.digit}${r2.digit}`;
@@ -1158,11 +1194,15 @@
 
             // If this split matches expected total calculated from column questions
             if (expectedTotal && num === Math.round(expectedTotal)) {
-              valStr = candVal;
-              numVal = num;
-              avgConf = Math.max(0.98, (r1.confidence + r2.confidence) / 2);
-              matchedExpected = true;
-              break;
+              const r1Ok = (r1.confidence >= 0.12) || (r1.probs && r1.probs[parseInt(r1.digit)] >= 0.10);
+              const r2Ok = (r2.confidence >= 0.12) || (r2.probs && r2.probs[parseInt(r2.digit)] >= 0.10);
+              if (r1Ok && r2Ok) {
+                valStr = candVal;
+                numVal = num;
+                avgConf = Math.max(0.98, (r1.confidence + r2.confidence) / 2);
+                matchedExpected = true;
+                break;
+              }
             }
 
             if (score > bestScore) {
