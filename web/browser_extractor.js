@@ -114,7 +114,7 @@
           ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/';
           ort.env.wasm.numThreads = 1;
 
-          const MODEL_VERSION = '20261031_v7';
+          const MODEL_VERSION = '20261031_v8';
           const possibleUrls = [
             `models/digit_model.onnx?v=${MODEL_VERSION}`,
             `/models/digit_model.onnx?v=${MODEL_VERSION}`,
@@ -489,6 +489,154 @@
     }
 
     /**
+     * Dynamically detect table horizontal and vertical grid lines to calibrate row and column bounds.
+     * Prevents row misalignment when images are cropped, scaled, or single-column.
+     */
+    detectTableGrid(rectifiedCanvas) {
+      if (typeof cv === 'undefined' || !cv.Mat || !cv.imread) {
+        return { rows: DOM_ROWS, columns: DOM_COLUMNS, isSingleColumn: false };
+      }
+      let mat = null, gray = null, bw = null, hKernel = null, hLines = null, vKernel = null, vLines = null;
+      try {
+        mat = cv.imread(rectifiedCanvas);
+        const W = mat.cols;
+        const H = mat.rows;
+        gray = new cv.Mat();
+        cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+        bw = new cv.Mat();
+        cv.adaptiveThreshold(gray, bw, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, 15, 2);
+
+        // Detect horizontal grid lines
+        const kHw = Math.max(20, Math.round(W / 10));
+        hKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kHw, 1));
+        hLines = new cv.Mat();
+        cv.morphologyEx(bw, hLines, cv.MORPH_OPEN, hKernel);
+
+        const hProj = new Float32Array(H);
+        for (let y = 0; y < H; y++) {
+          let sum = 0;
+          const rowStart = y * W;
+          for (let x = 0; x < W; x++) {
+            if (hLines.data[rowStart + x] > 0) sum++;
+          }
+          hProj[y] = sum;
+        }
+
+        const detectedY = [];
+        for (let y = 1; y < H - 1; y++) {
+          if (hProj[y] > W * 0.22 && hProj[y] >= hProj[y - 1] && hProj[y] >= hProj[y + 1]) {
+            if (detectedY.length === 0 || (y - detectedY[detectedY.length - 1]) > 20) {
+              detectedY.push(y);
+            }
+          }
+        }
+
+        // Detect vertical lines
+        const kVh = Math.max(20, Math.round(H / 15));
+        vKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, kVh));
+        vLines = new cv.Mat();
+        cv.morphologyEx(bw, vLines, cv.MORPH_OPEN, vKernel);
+
+        const vProj = new Float32Array(W);
+        for (let x = 0; x < W; x++) {
+          let sum = 0;
+          for (let y = 0; y < H; y++) {
+            if (vLines.data[y * W + x] > 0) sum++;
+          }
+          vProj[x] = sum;
+        }
+
+        const detectedX = [];
+        for (let x = 1; x < W - 1; x++) {
+          if (vProj[x] > H * 0.30 && vProj[x] >= vProj[x - 1] && vProj[x] >= vProj[x + 1]) {
+            if (detectedX.length === 0 || (x - detectedX[detectedX.length - 1]) > 35) {
+              detectedX.push(x);
+            }
+          }
+        }
+
+        const isSingleColumn = (W / H < 0.45) || (detectedX.length <= 3 && detectedX.length >= 1);
+
+        let dynamicRows = DOM_ROWS;
+        // Find the header divider line immediately preceding Question 1.a (always around y ≈ 90..96)
+        let headerY = -1;
+        let minDiff = Infinity;
+        for (let i = 0; i < detectedY.length; i++) {
+          const diff = Math.abs(detectedY[i] - 93);
+          if (diff < minDiff && diff < 18) {
+            minDiff = diff;
+            headerY = detectedY[i];
+          }
+        }
+        if (headerY < 0) headerY = 93;
+
+        const rowKeys = ['1a', '1b', '1c', '2a', '2b', '2c', '3a', '3b', '3c', '4a', '4b', '4c', 'total'];
+        const newRows = [];
+        const avgRowH = 47.1;
+
+        // Helper to find nearest detected grid line to a nominal target y
+        const snapToLine = (targetY) => {
+          let best = targetY;
+          let bestDist = 12; // snap radius
+          for (let i = 0; i < detectedY.length; i++) {
+            const dist = Math.abs(detectedY[i] - targetY);
+            if (dist < bestDist) {
+              bestDist = dist;
+              best = detectedY[i];
+            }
+          }
+          return best;
+        };
+
+        for (let r = 0; r < rowKeys.length; r++) {
+          const nominalY1 = Math.round(headerY + r * avgRowH);
+          const nominalY2 = Math.round(headerY + (r + 1) * avgRowH);
+          const y1 = snapToLine(nominalY1);
+          const y2 = snapToLine(nominalY2);
+
+          newRows.push({
+            id: rowKeys[r],
+            label: DOM_ROWS[r].label,
+            y1,
+            y2: Math.max(y1 + 35, y2),
+            max: DOM_ROWS[r].max,
+          });
+        }
+        dynamicRows = newRows;
+
+        let dynamicCols = DOM_COLUMNS;
+        if (isSingleColumn) {
+          const midX = detectedX.length > 0 ? detectedX[0] : Math.round(W * 0.46);
+          const marksRange = [Math.max(0, midX + 2), W - 4];
+          dynamicCols = {
+            'IA 1': { colRange: [0, W], marksX: marksRange },
+            'IA 2': { colRange: [0, W], marksX: marksRange },
+            'IA 3': { colRange: [0, W], marksX: marksRange },
+          };
+        } else if (detectedX.length >= 5) {
+          dynamicCols = {
+            'IA 1': { colRange: [0, detectedX[1]], marksX: [detectedX[0], detectedX[1]] },
+            'IA 2': { colRange: [detectedX[1], detectedX[3]], marksX: [detectedX[2], detectedX[3]] },
+            'IA 3': { colRange: [detectedX[3], W], marksX: [detectedX[4], Math.min(W, detectedX[4] + (detectedX[3] - detectedX[2]))] },
+          };
+        }
+
+        return { rows: dynamicRows, columns: dynamicCols, isSingleColumn };
+      } catch (e) {
+        console.warn('Grid line detection error, using defaults:', e);
+        return { rows: DOM_ROWS, columns: DOM_COLUMNS, isSingleColumn: false };
+      } finally {
+        if (mat) mat.delete();
+        if (gray) gray.delete();
+        if (bw) bw.delete();
+        if (hKernel) hKernel.delete();
+        if (hLines) hLines.delete();
+        if (vKernel) vKernel.delete();
+        if (vLines) vLines.delete();
+      }
+    }
+
+    /**
      * Extract red-pen strokes and check strikeout status.
      * Uses adaptive background thresholding to eliminate paper tint and shadow false-positives.
      */
@@ -673,19 +821,22 @@
 
       // Strikeout / Cut Mark / Dash detection rule:
       // Evaluators mark unattempted or 0 marks cells with:
-      // 1. Horizontal dash / line: short height (rh <= 11) or thin vertical ink profile (avgColSpan <= 6.8 px and rw >= 14) or wide aspect ratio (ratio >= 2.0 and rw >= 16)
-      // 2. Diagonal cut mark / slash (/ or \): highly linear diagonal stroke (corr >= 0.80, rh <= 24, rw >= 12, density <= 0.32, ratio 0.6 to 1.7)
+      // 1. Horizontal or slanted dash: wide span (rw >= 16) with thin column profile (maxColSpan <= 9 && avgColSpan <= 5.5)
+      // 2. Short horizontal line: rw >= 10 && rh <= 12
+      // 3. Wide stroke: ratio >= 1.4 && avgColSpan <= 6.0 && rw >= 16
+      // 4. Diagonal cut mark / slash (/ or \): highly linear diagonal stroke (corr >= 0.78, rh <= 28, rw >= 12, density <= 0.32)
       // Note: Total Marks cell is NEVER a strikeout (always numeric or blank).
       const isTotal = row && (row.id === 'total' || (row.max && row.max > 10.0));
-      const isSingleLineStroke = rw >= 14 && avgColSpan <= 6.8 && rh <= 24;
+      const isSingleLineStroke = rw >= 16 && maxColSpan <= 9 && avgColSpan <= 5.5;
       const isHorizontalDash = (
         isSingleLineStroke ||
-        (rw >= 10 && rh <= 11) ||
-        (rh <= 22 && ratio >= 1.6 && rw >= 16 && avgColSpan <= 7.5) ||
-        (ratio >= 2.5 && rw >= 20)
+        (rw >= 10 && rh <= 12) ||
+        (rw >= 14 && avgColSpan <= 6.8 && rh <= 24) ||
+        (rh <= 24 && ratio >= 1.4 && rw >= 16 && avgColSpan <= 6.5) ||
+        (ratio >= 2.2 && rw >= 18)
       );
       const isDiagonalCutMark = (
-        rh <= 24 && rw >= 12 && corr >= 0.80 && strokeDensity <= 0.32 && ratio >= 0.60 && ratio <= 1.70
+        rh <= 28 && rw >= 12 && corr >= 0.78 && strokeDensity <= 0.32 && ratio >= 0.50 && ratio <= 2.0
       );
 
       const isStrikeout = !isTotal && (isHorizontalDash || isDiagonalCutMark);
@@ -929,45 +1080,75 @@
     }
 
     /**
-     * Run neural classification on a 28x28 digit tensor.
+     * Run neural classification on a 28x28 digit tensor with Test-Time Augmentation (TTA).
      */
     async classifyDigit(tensorData) {
       if (!this.session) {
-        return { digit: '0', confidence: 0.5 };
+        return { digit: '0', confidence: 0.5, probs: new Float32Array(10) };
       }
 
-      const inputTensor = new ort.Tensor('float32', tensorData, [1, 1, 28, 28]);
+      // Generate 5 micro-shifted views: (0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)
+      const shifts = [
+        [0, 0],
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ];
+      const batchSize = shifts.length;
+      const batchData = new Float32Array(batchSize * 28 * 28);
+
+      for (let s = 0; s < batchSize; s++) {
+        const [dx, dy] = shifts[s];
+        const offset = s * 784;
+        for (let y = 0; y < 28; y++) {
+          const sy = y - dy;
+          const yOff = y * 28;
+          for (let x = 0; x < 28; x++) {
+            const sx = x - dx;
+            if (sx >= 0 && sx < 28 && sy >= 0 && sy < 28) {
+              batchData[offset + yOff + x] = tensorData[sy * 28 + sx];
+            } else {
+              batchData[offset + yOff + x] = 0;
+            }
+          }
+        }
+      }
+
+      const inputTensor = new ort.Tensor('float32', batchData, [batchSize, 1, 28, 28]);
       const results = await this.session.run({ input: inputTensor });
-      const output = results.output.data;
+      const outData = results.output.data;
 
-      const probs = new Float32Array(10);
-      let sum = 0;
-      for (let i = 0; i < 10; i++) sum += output[i];
+      const avgProbs = new Float32Array(10);
+      for (let s = 0; s < batchSize; s++) {
+        const sOff = s * 10;
+        let sum = 0;
+        for (let i = 0; i < 10; i++) sum += outData[sOff + i];
 
-      if (Math.abs(sum - 1.0) < 0.05) {
-        // Output is already softmax probabilities
-        for (let i = 0; i < 10; i++) probs[i] = output[i];
-      } else {
-        // Logits: compute stable softmax
-        let maxLogit = -Infinity;
-        for (let i = 0; i < 10; i++) {
-          if (output[i] > maxLogit) maxLogit = output[i];
-        }
-        let expSum = 0;
-        for (let i = 0; i < 10; i++) {
-          probs[i] = Math.exp(output[i] - maxLogit);
-          expSum += probs[i];
-        }
-        for (let i = 0; i < 10; i++) {
-          probs[i] /= expSum;
+        if (Math.abs(sum - 1.0) < 0.05) {
+          for (let i = 0; i < 10; i++) avgProbs[i] += outData[sOff + i] / batchSize;
+        } else {
+          let maxLogit = -Infinity;
+          for (let i = 0; i < 10; i++) {
+            if (outData[sOff + i] > maxLogit) maxLogit = outData[sOff + i];
+          }
+          let expSum = 0;
+          const sProbs = new Float32Array(10);
+          for (let i = 0; i < 10; i++) {
+            sProbs[i] = Math.exp(outData[sOff + i] - maxLogit);
+            expSum += sProbs[i];
+          }
+          for (let i = 0; i < 10; i++) {
+            avgProbs[i] += (sProbs[i] / expSum) / batchSize;
+          }
         }
       }
 
       let bestIdx = 0;
       let bestProb = -Infinity;
       for (let i = 0; i < 10; i++) {
-        if (probs[i] > bestProb) {
-          bestProb = probs[i];
+        if (avgProbs[i] > bestProb) {
+          bestProb = avgProbs[i];
           bestIdx = i;
         }
       }
@@ -975,7 +1156,7 @@
       return {
         digit: String(bestIdx),
         confidence: Math.round(bestProb * 1000) / 1000,
-        probs,
+        probs: avgProbs,
       };
     }
 
@@ -1021,27 +1202,46 @@
         if (res.digit === '8' && res.probs) {
           let leftInk = 0;
           let totInk = 0;
+          let botInk = 0;
+          let botLeftInk = 0;
           const boxW = box.maxX - box.minX + 1;
-          const splitLeftX = box.minX + Math.round(boxW * 0.35);
+          const boxH = box.maxY - box.minY + 1;
+          const splitLeftX = box.minX + Math.round(boxW * 0.40);
+          const midX = box.minX + Math.round(boxW * 0.50);
+          const botY = box.minY + Math.round(boxH * 0.55);
+
           for (let cy = box.minY; cy <= box.maxY; cy++) {
             const rOff = cy * cellInfo.w;
             for (let cx = box.minX; cx <= box.maxX; cx++) {
               if (cellInfo.mask[rOff + cx]) {
                 totInk++;
                 if (cx <= splitLeftX) leftInk++;
+                if (cy >= botY) {
+                  botInk++;
+                  if (cx < midX) botLeftInk++;
+                }
               }
             }
           }
           const leftFrac = leftInk / Math.max(1, totInk);
-          if ((leftFrac < 0.44 && res.probs[3] >= 0.03) || (res.probs[3] > res.probs[8] * 0.15)) {
-            res.digit = '3';
-            res.confidence = Math.max(0.95, res.probs[3]);
-          } else if (res.probs[7] >= 0.03 || res.probs[7] > res.probs[8] * 0.15) {
-            // Crossed-7 vs 8: crossbar intersection mistaken for waist of 8
+          const botLeftFrac = botLeftInk / Math.max(1, botInk);
+
+          // A. Crossed-7 vs 8:
+          // A real 8 has a full bottom loop where left and right have roughly equal ink (botLeftFrac >= 0.25).
+          // A 7 has only a diagonal stem on the right side in the bottom half (botLeftFrac is near 0).
+          if (botLeftFrac < 0.14 && botInk >= 6) {
             res.digit = '7';
-            res.confidence = Math.max(0.95, res.probs[7]);
-          } else if (res.probs[5] >= 0.03 || res.probs[5] > res.probs[8] * 0.15) {
-            // Evaluator 5 mistaken for 8: top stroke is horizontal/slanted bar and belly
+            res.confidence = Math.max(0.96, res.probs[7]);
+          }
+          // B. Open 3 vs 8:
+          // An 8 has closed left walls on both loops (leftFrac >= 0.40).
+          // An open 3 has no left perimeter wall (leftFrac < 0.35).
+          else if (leftFrac < 0.35 || (leftFrac < 0.44 && res.probs[3] >= 0.02) || (res.probs[3] > res.probs[8] * 0.12)) {
+            res.digit = '3';
+            res.confidence = Math.max(0.96, res.probs[3]);
+          }
+          // C. Detached 5 vs 8:
+          else if (res.probs[5] >= 0.03 || res.probs[5] > res.probs[8] * 0.12) {
             res.digit = '5';
             res.confidence = Math.max(0.95, res.probs[5]);
           }
@@ -1051,7 +1251,7 @@
         // Evaluators write cursive 5 with an open top curve that flows into stem and belly.
         // CNN can confuse top open hook with top curve of 6.
         if (res.digit === '6' && res.probs) {
-          if (res.probs[5] >= 0.04 || res.probs[5] > res.probs[6] * 0.18) {
+          if (res.probs[5] >= 0.03 || res.probs[5] > res.probs[6] * 0.15) {
             res.digit = '5';
             res.confidence = Math.max(0.95, res.probs[5]);
           }
@@ -1060,7 +1260,7 @@
         // 3. Evaluator Open-top 4 vs 2:
         // In an open-top 4, top third has two vertical stems (left vertical stem, right vertical stem).
         // A 2 has a single rounded arch at the top.
-        if (res.digit === '2' && res.probs && (res.probs[4] >= 0.04 || res.probs[4] > res.probs[2] * 0.18)) {
+        if (res.digit === '2' && res.probs && (res.probs[4] >= 0.03 || res.probs[4] > res.probs[2] * 0.15)) {
           let rightTopInk = 0, leftTopInk = 0;
           const boxW = box.maxX - box.minX + 1;
           const boxH = box.maxY - box.minY + 1;
@@ -1075,7 +1275,7 @@
               }
             }
           }
-          if (rightTopInk >= 6 && leftTopInk >= 5) {
+          if (rightTopInk >= 5 && leftTopInk >= 4) {
             res.digit = '4';
             res.confidence = Math.max(0.95, res.probs[4]);
           }
@@ -1262,10 +1462,21 @@
       await this.init();
 
       const rectified = await this.rectifyTable(canvas);
+      const grid = this.detectTableGrid(rectified);
+      const activeRows = grid.rows || DOM_ROWS;
+      const activeCols = grid.columns || DOM_COLUMNS;
 
       const targetClean = String(targetIA).trim().toUpperCase();
       let selectedIAs = [];
-      if (targetClean.includes('ALL')) {
+      if (grid.isSingleColumn) {
+        if (targetClean.includes('IA 2') || targetClean.includes('SECOND') || targetClean === '2') {
+          selectedIAs = ['IA 2'];
+        } else if (targetClean.includes('IA 3') || targetClean.includes('THIRD') || targetClean === '3') {
+          selectedIAs = ['IA 3'];
+        } else {
+          selectedIAs = ['IA 1'];
+        }
+      } else if (targetClean.includes('ALL')) {
         selectedIAs = ['IA 1', 'IA 2', 'IA 3'];
       } else if (targetClean.includes('IA 2') || targetClean.includes('SECOND') || targetClean === '2') {
         selectedIAs = ['IA 2'];
@@ -1277,8 +1488,10 @@
 
       // Create Overview Column Crop
       let overviewCanvas;
-      if (selectedIAs.length === 1) {
-        const range = DOM_COLUMNS[selectedIAs[0]].colRange;
+      if (grid.isSingleColumn) {
+        overviewCanvas = this.cropCanvas(rectified, 0, 0, rectified.width, rectified.height);
+      } else if (selectedIAs.length === 1) {
+        const range = activeCols[selectedIAs[0]].colRange;
         overviewCanvas = this.cropCanvas(rectified, range[0], 0, range[1] - range[0], 715);
       } else {
         overviewCanvas = this.cropCanvas(rectified, 0, 0, 600, 715);
@@ -1289,20 +1502,20 @@
       const summaryTotals = {};
 
       for (const iaName of selectedIAs) {
-        const marksX = DOM_COLUMNS[iaName].marksX;
+        const marksX = activeCols[iaName].marksX;
         const marksList = [];
         let calcSum = 0;
         let detectedTotal = null;
 
-        for (const row of DOM_ROWS) {
-          const padTop = 5;
-          const padBottom = row.id === 'total' ? 6 : 5;
+        for (const row of activeRows) {
+          const padTop = 4;
+          const padBottom = row.id === 'total' ? 5 : 4;
           const cellCanvas = this.cropCanvas(
             rectified,
-            marksX[0] + 6,
+            marksX[0] + 4,
             row.y1 + padTop,
-            marksX[1] - marksX[0] - 12,
-            row.y2 - row.y1 - (padTop + padBottom)
+            Math.max(10, marksX[1] - marksX[0] - 8),
+            Math.max(10, row.y2 - row.y1 - (padTop + padBottom))
           );
 
           const markRes = await this.recognizeCell(cellCanvas, row.max, row, calcSum);

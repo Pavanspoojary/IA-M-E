@@ -184,9 +184,17 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                     cv2.line(canvas, (18, 42), (38, 42), 255, thickness, cv2.LINE_AA)
 
             elif digit == 3:
-                # 3: flat-top, open cursive, looped waist, sharp center, evaluator open lobes
-                style = np.random.choice(["flat_top", "open_cursive", "loop_waist", "sharp_center", "evaluator_open", "slanted_open"], p=[0.15, 0.25, 0.15, 0.15, 0.15, 0.15])
-                if style == "evaluator_open":
+                # 3: flat-top, open cursive, looped waist, sharp center, evaluator open lobes, top curled loop
+                style = np.random.choice([
+                    "flat_top", "open_cursive", "loop_waist", "sharp_center", "evaluator_open", "slanted_open", "top_curled_loop"
+                ], p=[0.12, 0.20, 0.12, 0.12, 0.16, 0.14, 0.14])
+                if style == "top_curled_loop":
+                    # Evaluator cursive 3 with curled loop/serif at top
+                    cv2.ellipse(canvas, (24, 16), (4, 3), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (26, 16), (36, 16), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (36, 16), (25, 27), 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, 36), (9, 9), 0, -90, 130, 255, thickness, cv2.LINE_AA)
+                elif style == "evaluator_open":
                     # Distinct evaluator 3: two open rounded lobes with a deep central tuck/waist
                     cv2.ellipse(canvas, (26, 20), (8, 7), 0, -130, 110, 255, thickness, cv2.LINE_AA)
                     cv2.line(canvas, (34, 20), (24, 28), 255, thickness, cv2.LINE_AA)
@@ -245,9 +253,19 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                     cv2.line(canvas, (32, 10), (32, 46), 255, thickness, cv2.LINE_AA)
 
             elif digit == 5:
-                # 5: separated top stroke, continuous cursive single-stroke, attached, or floating bar
-                style = np.random.choice(["continuous_cursive", "floating_bar", "separated", "attached", "slanted"], p=[0.30, 0.25, 0.15, 0.15, 0.15])
-                if style == "continuous_cursive":
+                # 5: separated top stroke, continuous cursive single-stroke, attached, floating bar, or slanted top straight
+                style = np.random.choice(["continuous_cursive", "floating_bar", "separated", "attached", "slanted", "slanted_top_straight"], p=[0.25, 0.20, 0.15, 0.15, 0.10, 0.15])
+                if style == "slanted_top_straight":
+                    # Evaluator 5 with straight top stroke (often confused with 6 or 8)
+                    x1 = np.random.randint(18, 24)
+                    y1 = np.random.randint(10, 15)
+                    x2 = np.random.randint(30, 38)
+                    cv2.line(canvas, (x1, y1), (x2, y1 - np.random.randint(0, 3)), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (x1, y1), (x1, y1 + np.random.randint(10, 14)), 255, thickness, cv2.LINE_AA)
+                    center = (x1 + np.random.randint(6, 9), (y1 + 12 + 40) // 2)
+                    axes = (np.random.randint(9, 13), np.random.randint(9, 12))
+                    cv2.ellipse(canvas, center, axes, 0, -80, 140, 255, thickness, cv2.LINE_AA)
+                elif style == "continuous_cursive":
                     # Single continuous stroke: top curved bar flowing down into stem and belly
                     x_start = np.random.randint(32, 38)
                     y_start = np.random.randint(11, 15)
@@ -291,27 +309,39 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
 
             elif digit == 7:
                 # 7: crossed 7 (dominant in Indian bluebooks, 85%+ frequency) or clean 7
-                style = np.random.choice(["crossed_std", "crossed_hook", "crossed_wide", "crossed_slanted", "clean"], p=[0.40, 0.25, 0.15, 0.10, 0.10])
-                x1, y1 = np.random.randint(14, 18), np.random.randint(12, 16)
-                x2, y2 = np.random.randint(34, 44), y1 + np.random.randint(-1, 3)
-                cv2.line(canvas, (x1, y1), (x2, y2), 255, thickness, cv2.LINE_AA)
+                style = np.random.choice(["crossed_std", "crossed_hook", "crossed_wide", "crossed_slanted", "crossed_hook_bar", "clean"], p=[0.30, 0.20, 0.15, 0.10, 0.15, 0.10])
+                if style == "crossed_hook_bar":
+                    # Evaluator crossed 7 with prominent left hook and center crossbar (often confused with 8)
+                    x1, y1 = np.random.randint(14, 18), np.random.randint(12, 16)
+                    x2, y2 = np.random.randint(34, 42), y1 + np.random.randint(-1, 2)
+                    cv2.line(canvas, (x1, y1), (x2, y2), 255, thickness, cv2.LINE_AA)
+                    cv2.line(canvas, (x1, y1), (x1, y1 + np.random.randint(6, 12)), 255, thickness, cv2.LINE_AA)
+                    x3, y3 = np.random.randint(18, 25), np.random.randint(42, 48)
+                    cv2.line(canvas, (x2, y2), (x3, y3), 255, thickness, cv2.LINE_AA)
+                    cx_mid = (x2 + x3) // 2
+                    cy_mid = (y2 + y3) // 2
+                    cv2.line(canvas, (cx_mid - 10, cy_mid), (cx_mid + 10, cy_mid), 255, thickness + 1, cv2.LINE_AA)
+                else:
+                    x1, y1 = np.random.randint(14, 18), np.random.randint(12, 16)
+                    x2, y2 = np.random.randint(34, 44), y1 + np.random.randint(-1, 3)
+                    cv2.line(canvas, (x1, y1), (x2, y2), 255, thickness, cv2.LINE_AA)
 
-                # Optional left serif / hook going downwards
-                if style in ["crossed_hook", "crossed_slanted"] or np.random.rand() < 0.4:
-                    cv2.line(canvas, (x1, y1), (x1, y1 + np.random.randint(4, 9)), 255, thickness, cv2.LINE_AA)
+                    # Optional left serif / hook going downwards
+                    if style in ["crossed_hook", "crossed_slanted"] or np.random.rand() < 0.4:
+                        cv2.line(canvas, (x1, y1), (x1, y1 + np.random.randint(4, 9)), 255, thickness, cv2.LINE_AA)
 
-                x3, y3 = np.random.randint(17, 27), np.random.randint(42, 48)
-                cv2.line(canvas, (x2, y2), (x3, y3), 255, thickness, cv2.LINE_AA)
+                    x3, y3 = np.random.randint(17, 27), np.random.randint(42, 48)
+                    cv2.line(canvas, (x2, y2), (x3, y3), 255, thickness, cv2.LINE_AA)
 
-                # Add prominent horizontal crossbar
-                if style != "clean":
-                    frac = float(np.random.uniform(0.35, 0.62))
-                    cx_mid = int(x2 + (x3 - x2) * frac)
-                    cy_mid = int(y2 + (y3 - y2) * frac)
-                    bar_w = np.random.randint(12, 24) if style == "crossed_wide" else np.random.randint(10, 20)
-                    tilt = np.random.randint(-3, 4) if style == "crossed_slanted" else np.random.randint(-1, 2)
-                    bar_thick = thickness if np.random.rand() > 0.3 else thickness + 1
-                    cv2.line(canvas, (cx_mid - bar_w // 2, cy_mid - tilt), (cx_mid + bar_w // 2, cy_mid + tilt), 255, bar_thick, cv2.LINE_AA)
+                    # Add prominent horizontal crossbar
+                    if style != "clean":
+                        frac = float(np.random.uniform(0.35, 0.62))
+                        cx_mid = int(x2 + (x3 - x2) * frac)
+                        cy_mid = int(y2 + (y3 - y2) * frac)
+                        bar_w = np.random.randint(12, 24) if style == "crossed_wide" else np.random.randint(10, 20)
+                        tilt = np.random.randint(-3, 4) if style == "crossed_slanted" else np.random.randint(-1, 2)
+                        bar_thick = thickness if np.random.rand() > 0.3 else thickness + 1
+                        cv2.line(canvas, (cx_mid - bar_w // 2, cy_mid - tilt), (cx_mid + bar_w // 2, cy_mid + tilt), 255, bar_thick, cv2.LINE_AA)
 
             elif digit == 8:
                 # 8: continuous parametric S-curve, asymmetrical loops, or double-circle
@@ -533,26 +563,38 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
 
     # Direct injection and massive augmentation of user failure-case snippets
     direct_snippets = [
-        ("user_fail_im2_box_0.png", 5, 1000), # Evaluator slanted detached 5 in 4.a
+        ("real_sample1_IA2_1a.png", 7, 1000),  # Evaluator crossed 7 with hook & bar
+        ("real_sample2_IA2_1b.png", 2, 1000),  # Evaluator cursive 2
+        ("real_sample3_IA2_1a.png", 7, 1000),  # Evaluator crossed 7
+        ("real_sample3_IA2_3b.png", 3, 1000),  # Evaluator cursive 3
+        ("real_sample2_IA2_4a.png", 5, 1000),  # Evaluator 5
+        ("real_sample2_IA2_4b.png", 8, 1000),  # Evaluator 8
+        ("debug_s8_3a.png", 5, 1000),          # Evaluator 5 with straight top stroke
+        ("debug_s8_3b.png", 3, 1000),          # Evaluator cursive 3 with curled top loop
+        ("debug_fail_s10_4a_5.png", 5, 1000),  # Evaluator slanted detached 5
+        ("debug_fail_s10_4b_8.png", 8, 1000),  # Evaluator figure 8
+        ("debug_fail_s7_1a_7.png", 7, 1000),   # Evaluator crossed 7
+        ("debug_fail_s7_1b_3.png", 3, 1000),   # Evaluator open 3
         ("debug_fail_24_right4.png", 4, 1000), # Evaluator open-top 4 in Total 24
-        ("debug_fail_24_left2.png", 2, 800),   # Evaluator cursive 2 in Total 24
-        ("user_fail_im1_crop_0.png", 5, 900), # Evaluator cursive 5 misclassified as 6
-        ("user_fail_im1_crop_1.png", 3, 900), # Evaluator open curved 3 misclassified as 8
-        ("user_fail_im3_crop_0.png", 7, 900), # Evaluator slanted crossed 7 misclassified as 8
-        ("user_fail_im3_crop_1.png", 3, 900), # Evaluator cursive 3 misclassified as 8
-        ("debug_fail_total_2.png", 2, 700),   # Evaluator total marks '2' in 23
-        ("debug_fail_total_3.png", 3, 700),   # Evaluator total marks '3' in 23
-        ("user_snip_1a.png", 7, 600),         # Crossed 7 misclassified as 8/4
-        ("user_snip_1b.png", 3, 600),         # Open curved 3 misclassified as 8
-        ("debug_user_total_2.png", 2, 500),   # Left '2' of total 23
-        ("debug_user_total_3.png", 3, 500),   # Right '3' of total 23
-        ("debug_sim_4b.png", 8, 500),         # Real figure-8 from test sheets
-        ("debug_cell_ia2_1a.png", 8, 500),    # Real figure-8
-        ("debug_cell_ia2_3b.png", 3, 500),    # Real open 3
-        ("debug_split47_l.png", 2, 400),      # Real 2 from total 24
-        ("debug_split47_r.png", 4, 400),      # Real 4 from total 24
-        ("debug_split_left.png", 2, 300),     # Left '2' from 24
-        ("debug_split_right.png", 4, 300),    # Right '4' from 24
+        ("debug_fail_24_left2.png", 2, 1000),  # Evaluator cursive 2 in Total 24
+        ("debug_fail_total_23_left2.png", 2, 800),  # Left 2 of total 23
+        ("debug_fail_total_23_right3.png", 3, 800), # Right 3 of total 23
+        ("user_fail_im2_box_0.png", 5, 1000),  # Evaluator slanted detached 5 in 4.a
+        ("user_fail_im1_crop_0.png", 5, 900),  # Evaluator cursive 5 misclassified as 6
+        ("user_fail_im1_crop_1.png", 3, 900),  # Evaluator open curved 3 misclassified as 8
+        ("user_fail_im3_crop_0.png", 7, 900),  # Evaluator slanted crossed 7 misclassified as 8
+        ("user_fail_im3_crop_1.png", 3, 900),  # Evaluator cursive 3 misclassified as 8
+        ("debug_fail_total_2.png", 2, 700),    # Evaluator total marks '2' in 23
+        ("debug_fail_total_3.png", 3, 700),    # Evaluator total marks '3' in 23
+        ("user_snip_1a.png", 7, 600),          # Crossed 7 misclassified as 8/4
+        ("user_snip_1b.png", 3, 600),          # Open curved 3 misclassified as 8
+        ("debug_user_total_2.png", 2, 500),    # Left '2' of total 23
+        ("debug_user_total_3.png", 3, 500),    # Right '3' of total 23
+        ("debug_sim_4b.png", 8, 500),          # Real figure-8 from test sheets
+        ("debug_cell_ia2_1a.png", 8, 500),     # Real figure-8
+        ("debug_cell_ia2_3b.png", 3, 500),     # Real open 3
+        ("debug_split47_l.png", 2, 400),       # Real 2 from total 24
+        ("debug_split47_r.png", 4, 400),       # Real 4 from total 24
     ]
 
     for fn, label, num_augs in direct_snippets:
@@ -570,13 +612,16 @@ def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
             b, g, r = cv2.split(c_img)
             diff = r.astype(float) - np.maximum(b.astype(float), g.astype(float))
             bg_diff = np.median(diff[2:-2, 2:-2])
-            strong = (diff >= max(9, bg_diff + 7)) & (r > 65)
-            weak = (diff >= max(4, bg_diff + 3)) & (r > 65)
+            strong = (diff >= max(9, bg_diff + 6)) & (r > 60)
+            weak = (diff >= max(4, bg_diff + 3)) & (r > 60)
             num_labels, labels_cc = cv2.connectedComponents(weak.astype(np.uint8))
             mask_snip = np.zeros_like(weak, dtype=np.uint8)
             for lbl in range(1, num_labels):
                 if np.any(strong[labels_cc == lbl]):
                     mask_snip[labels_cc == lbl] = 255
+            if mask_snip.sum() < 30:
+                gray = cv2.cvtColor(c_img, cv2.COLOR_BGR2GRAY)
+                mask_snip = (gray < 160).astype(np.uint8) * 255
             c_norm = center_and_scale_to_28(mask_snip)
 
         if c_norm is not None:

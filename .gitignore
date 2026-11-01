@@ -38,5 +38,8 @@ debug_*.jpg
 row_*.png
 user_snip_*.png
 user_fail_*.png
+real_sample*.png
+warped_*.png
+data/
 training_data/
 models/mnist_data/

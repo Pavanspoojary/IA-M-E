@@ -59,6 +59,23 @@
   const btnDownloadCsv = document.getElementById('btnDownloadCsv');
   const btnNewExtraction = document.getElementById('btnNewExtraction');
 
+  const snippetModal = document.getElementById('snippetModal');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalImg = document.getElementById('modalImg');
+  const modalDetails = document.getElementById('modalDetails');
+  const btnModalClose = document.getElementById('btnModalClose');
+
+  if (btnModalClose) {
+    btnModalClose.addEventListener('click', () => {
+      if (snippetModal) snippetModal.style.display = 'none';
+    });
+  }
+  if (snippetModal) {
+    snippetModal.addEventListener('click', (e) => {
+      if (e.target === snippetModal) snippetModal.style.display = 'none';
+    });
+  }
+
   // Handle Document Selected
   function setDocument(file, isDemo = false) {
     selectedFile = file;
@@ -312,7 +329,22 @@
         // Snippet cell
         const tdCrop = document.createElement('td');
         if (m.crop_base64) {
-          tdCrop.innerHTML = `<img src="${m.crop_base64}" alt="${m.label}" class="cell-crop">`;
+          const imgCrop = document.createElement('img');
+          imgCrop.src = m.crop_base64;
+          imgCrop.alt = m.label;
+          imgCrop.className = 'cell-crop';
+          imgCrop.title = 'Click to inspect handwriting';
+          imgCrop.style.cursor = 'zoom-in';
+          imgCrop.addEventListener('click', () => {
+            if (modalTitle) modalTitle.textContent = `${iaPrefix}${m.label} Handwriting Inspection`;
+            if (modalImg) modalImg.src = m.crop_base64;
+            const confPercent = m.confidence ? Math.round(m.confidence * 100) : 0;
+            if (modalDetails) {
+              modalDetails.textContent = `Detected Value: ${m.detected_str || '-'} | Confidence: ${confPercent}% | Status: ${m.status}`;
+            }
+            if (snippetModal) snippetModal.style.display = 'flex';
+          });
+          tdCrop.appendChild(imgCrop);
         } else {
           tdCrop.innerHTML = '<span style="color: var(--text-muted); font-size: 0.8rem;">No crop</span>';
         }
@@ -351,6 +383,27 @@
             stCell.innerHTML = getBadgeHTML('Corrected manually');
           }
           recalculateTotals();
+        });
+
+        // Fast keyboard navigation: Enter / ArrowDown moves down, ArrowUp moves up
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const allInputs = Array.from(document.querySelectorAll('.mark-input'));
+            const currIdx = allInputs.indexOf(input);
+            if (currIdx >= 0 && currIdx < allInputs.length - 1) {
+              allInputs[currIdx + 1].focus();
+              allInputs[currIdx + 1].select();
+            }
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            const allInputs = Array.from(document.querySelectorAll('.mark-input'));
+            const currIdx = allInputs.indexOf(input);
+            if (currIdx > 0) {
+              allInputs[currIdx - 1].focus();
+              allInputs[currIdx - 1].select();
+            }
+          }
         });
 
         tdInput.appendChild(input);
