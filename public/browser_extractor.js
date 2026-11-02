@@ -144,6 +144,7 @@
 
           if (!session) {
             console.error('Failed to load ONNX model from paths:', lastErr);
+            this.initPromise = null;
             return false;
           }
 
@@ -152,6 +153,7 @@
           return true;
         } catch (e) {
           console.error('Error during ONNX init:', e);
+          this.initPromise = null;
           return false;
         }
       })();
@@ -558,14 +560,41 @@
         const isSingleColumn = (W / H < 0.45) || (detectedX.length <= 3 && detectedX.length >= 1);
 
         let dynamicRows = DOM_ROWS;
-        // Find the header divider line immediately preceding Question 1.a (always around y ≈ 90..96)
+        // Find the line separating header rows from Question 1.a
+        // Strategy:
+        // 1. If bottom Total Marks line exists near y ≈ 630..680, count 12 rows UP:
+        let totalTopY = -1;
+        for (let i = detectedY.length - 1; i >= 0; i--) {
+          if (detectedY[i] >= 630 && detectedY[i] <= 680) {
+            totalTopY = detectedY[i];
+            break;
+          }
+        }
+
         let headerY = -1;
-        let minDiff = Infinity;
-        for (let i = 0; i < detectedY.length; i++) {
-          const diff = Math.abs(detectedY[i] - 93);
-          if (diff < minDiff && diff < 18) {
-            minDiff = diff;
-            headerY = detectedY[i];
+        if (totalTopY > 0) {
+          const expectedHeaderY = Math.round(totalTopY - 12 * 46.8);
+          let minDiff = Infinity;
+          for (let i = 0; i < detectedY.length; i++) {
+            const diff = Math.abs(detectedY[i] - expectedHeaderY);
+            if (diff < minDiff && diff < 24) {
+              minDiff = diff;
+              headerY = detectedY[i];
+            }
+          }
+        }
+
+        // 2. If not found, look for candidate lines near nominal 90..100,
+        // strictly skipping any top table border line (y < 65) that might be above "First I.A. Test"
+        if (headerY < 0) {
+          let minDiff = Infinity;
+          for (let i = 0; i < detectedY.length; i++) {
+            if (detectedY[i] < 65) continue; // Skip title border lines
+            const diff = Math.abs(detectedY[i] - 93);
+            if (diff < minDiff && diff < 20) {
+              minDiff = diff;
+              headerY = detectedY[i];
+            }
           }
         }
         if (headerY < 0) headerY = 93;
@@ -821,22 +850,23 @@
 
       // Strikeout / Cut Mark / Dash detection rule:
       // Evaluators mark unattempted or 0 marks cells with:
-      // 1. Horizontal or slanted dash: wide span (rw >= 16) with thin column profile (maxColSpan <= 9 && avgColSpan <= 5.5)
-      // 2. Short horizontal line: rw >= 10 && rh <= 12
-      // 3. Wide stroke: ratio >= 1.4 && avgColSpan <= 6.0 && rw >= 16
-      // 4. Diagonal cut mark / slash (/ or \): highly linear diagonal stroke (corr >= 0.78, rh <= 28, rw >= 12, density <= 0.32)
+      // 1. Horizontal or slanted dash: wide span (rw >= 14) with thin column profile (maxColSpan <= 9 && avgColSpan <= 5.8)
+      // 2. Short horizontal line: rw >= 10 && rh <= 14
+      // 3. Wide stroke: ratio >= 1.25 && rw >= 15 && rh <= 24
+      // 4. Diagonal cut mark / slash (/ or \): highly linear diagonal stroke (corr >= 0.72, rh <= 30, rw >= 10, density <= 0.35)
       // Note: Total Marks cell is NEVER a strikeout (always numeric or blank).
       const isTotal = row && (row.id === 'total' || (row.max && row.max > 10.0));
-      const isSingleLineStroke = rw >= 16 && maxColSpan <= 9 && avgColSpan <= 5.5;
+      const isSingleLineStroke = rw >= 14 && maxColSpan <= 9 && avgColSpan <= 5.8;
       const isHorizontalDash = (
         isSingleLineStroke ||
-        (rw >= 10 && rh <= 12) ||
-        (rw >= 14 && avgColSpan <= 6.8 && rh <= 24) ||
-        (rh <= 24 && ratio >= 1.4 && rw >= 16 && avgColSpan <= 6.5) ||
-        (ratio >= 2.2 && rw >= 18)
+        (rw >= 10 && rh <= 14) ||
+        (rw >= 14 && avgColSpan <= 7.0 && rh <= 24) ||
+        (rh <= 24 && ratio >= 1.25 && rw >= 15) ||
+        (ratio >= 1.8 && rw >= 14) ||
+        (ratio >= 2.2)
       );
       const isDiagonalCutMark = (
-        rh <= 28 && rw >= 12 && corr >= 0.78 && strokeDensity <= 0.32 && ratio >= 0.50 && ratio <= 2.0
+        rh <= 30 && rw >= 10 && corr >= 0.72 && strokeDensity <= 0.35 && ratio >= 0.40 && ratio <= 2.2
       );
 
       const isStrikeout = !isTotal && (isHorizontalDash || isDiagonalCutMark);
@@ -1084,7 +1114,10 @@
      */
     async classifyDigit(tensorData) {
       if (!this.session) {
-        return { digit: '0', confidence: 0.5, probs: new Float32Array(10) };
+        await this.init();
+      }
+      if (!this.session) {
+        throw new Error('Neural digit recognition model is initializing. Please wait a moment and try again.');
       }
 
       // Generate 5 micro-shifted views: (0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)
@@ -1234,26 +1267,68 @@
             res.confidence = Math.max(0.96, res.probs[7]);
           }
           // B. Open 3 vs 8:
-          // An 8 has closed left walls on both loops (leftFrac >= 0.40).
-          // An open 3 has no left perimeter wall (leftFrac < 0.35).
-          else if (leftFrac < 0.35 || (leftFrac < 0.44 && res.probs[3] >= 0.02) || (res.probs[3] > res.probs[8] * 0.12)) {
+          // An 8 has closed left walls on both loops (leftFrac >= 0.42).
+          // An open 3 has an open left perimeter (leftFrac < 0.38) and viable 3 probability.
+          else if ((leftFrac < 0.38 && res.probs[3] >= 0.02) || (leftFrac < 0.45 && res.probs[3] > res.probs[8] * 0.15)) {
             res.digit = '3';
             res.confidence = Math.max(0.96, res.probs[3]);
           }
-          // C. Detached 5 vs 8:
-          else if (res.probs[5] >= 0.03 || res.probs[5] > res.probs[8] * 0.12) {
+          // C. Detached / Cursive 5 vs 8:
+          // A 5 has an open bottom-left belly (botLeftFrac < 0.22) and viable 5 probability.
+          // In contrast, an 8 has a closed bottom loop with botLeftFrac >= 0.28.
+          else if (botLeftFrac < 0.22 && (res.probs[5] >= 0.05 || res.probs[5] > res.probs[8] * 0.15)) {
             res.digit = '5';
             res.confidence = Math.max(0.95, res.probs[5]);
           }
         }
 
-        // 2. Evaluator Cursive 5 vs 6:
-        // Evaluators write cursive 5 with an open top curve that flows into stem and belly.
-        // CNN can confuse top open hook with top curve of 6.
+        // 2. Evaluator 8 vs 6 or Cursive 5 vs 6:
         if (res.digit === '6' && res.probs) {
-          if (res.probs[5] >= 0.03 || res.probs[5] > res.probs[6] * 0.15) {
+          let tLeft = 0, tRight = 0, bLeft = 0, bRight = 0;
+          const boxW = box.maxX - box.minX + 1;
+          const boxH = box.maxY - box.minY + 1;
+          const midX = box.minX + Math.round(boxW * 0.5);
+          const midY = box.minY + Math.round(boxH * 0.5);
+          for (let cy = box.minY; cy <= box.maxY; cy++) {
+            const rOff = cy * cellInfo.w;
+            for (let cx = box.minX; cx <= box.maxX; cx++) {
+              if (cellInfo.mask[rOff + cx]) {
+                if (cy < midY) {
+                  if (cx < midX) tLeft++; else tRight++;
+                } else {
+                  if (cx < midX) bLeft++; else bRight++;
+                }
+              }
+            }
+          }
+          // Figure-8 with closed loops in both top and bottom quadrants
+          if (tLeft >= 3 && tRight >= 3 && bLeft >= 3 && bRight >= 3 && (res.probs[8] >= 0.02 || res.probs[8] > res.probs[6] * 0.10)) {
+            res.digit = '8';
+            res.confidence = Math.max(0.95, res.probs[8]);
+          } else if (res.probs[5] >= 0.03 || res.probs[5] > res.probs[6] * 0.15) {
             res.digit = '5';
             res.confidence = Math.max(0.95, res.probs[5]);
+          }
+        }
+
+        // 3. Evaluator 8 vs 4:
+        if (res.digit === '4' && res.probs) {
+          let bLeft = 0, bRight = 0;
+          const boxW = box.maxX - box.minX + 1;
+          const boxH = box.maxY - box.minY + 1;
+          const midX = box.minX + Math.round(boxW * 0.5);
+          const botY = box.minY + Math.round(boxH * 0.60);
+          for (let cy = botY; cy <= box.maxY; cy++) {
+            const rOff = cy * cellInfo.w;
+            for (let cx = box.minX; cx <= box.maxX; cx++) {
+              if (cellInfo.mask[rOff + cx]) {
+                if (cx < midX) bLeft++; else bRight++;
+              }
+            }
+          }
+          if (bLeft >= 4 && bRight >= 4 && (res.probs[8] >= 0.02 || res.probs[8] > res.probs[4] * 0.10)) {
+            res.digit = '8';
+            res.confidence = Math.max(0.95, res.probs[8]);
           }
         }
 
@@ -1378,6 +1453,12 @@
               }
             }
 
+            // Evaluator cursive 2 vs 4 / 7 for tens digit in Total Marks:
+            if ((r1.digit === '4' || r1.digit === '7') && r1.probs && (r1.probs[2] >= 0.05 || (expectedTotal && expectedTotal >= 20 && expectedTotal <= 30))) {
+              r1.digit = '2';
+              r1.confidence = Math.max(0.92, r1.probs[2] || 0.85);
+            }
+
             if (r2.digit === '2' && r2.probs && (r2.probs[4] >= 0.04 || r2.probs[4] > r2.probs[2] * 0.18)) {
               r2.digit = '4';
               r2.confidence = Math.max(0.92, r2.probs[4]);
@@ -1388,22 +1469,11 @@
             if (num < 0 || num > 50) continue;
 
             const prod = r1.confidence * r2.confidence;
+            // Mild tie-breaker only when candidates have very close visual confidence:
+            // Never override clear visual handwriting evidence with question sum
             const diff = expectedTotal ? Math.abs(num - expectedTotal) : 0;
-            const bonus = diff === 0 ? 50.0 : (diff <= 1 ? 25.0 : (diff <= 2 ? 8.0 : (diff <= 3 ? 2.5 : 1.0 / (1.0 + diff * 2.0))));
+            const bonus = diff === 0 ? 1.25 : (diff <= 1 ? 1.10 : 1.0);
             const score = prod * bonus;
-
-            // If this split matches expected total calculated from column questions
-            if (expectedTotal && num === Math.round(expectedTotal)) {
-              const r1Ok = (r1.confidence >= 0.12) || (r1.probs && r1.probs[parseInt(r1.digit)] >= 0.10);
-              const r2Ok = (r2.confidence >= 0.12) || (r2.probs && r2.probs[parseInt(r2.digit)] >= 0.10);
-              if (r1Ok && r2Ok) {
-                valStr = candVal;
-                numVal = num;
-                avgConf = Math.max(0.98, (r1.confidence + r2.confidence) / 2);
-                matchedExpected = true;
-                break;
-              }
-            }
 
             if (score > bestScore) {
               bestScore = score;
@@ -1618,55 +1688,109 @@
 
     /**
      * Export data to CSV string and download via Blob.
+     * Formats academic marks matrix with proper headers, ordering, and filled values.
      */
     downloadCsv(extractionData, filename = 'IA_Marks_Evaluation.csv') {
       const sheets = extractionData.sheets || [];
       if (sheets.length === 0) return;
 
-      const qHeaders = [
-        '1.a', '1.b', '1.c',
-        '2.a', '2.b', '2.c',
-        '3.a', '3.b', '3.c',
-        '4.a', '4.b', '4.c',
-      ];
-      const headerLine = ['Sheet', 'Assessment', ...qHeaders, 'Total', 'Status'].join(',');
+      const normKey = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // Determine question columns
+      let is12Questions = false;
+      for (const s of sheets) {
+        for (const ia of Object.keys(s.results_by_ia || {})) {
+          const list = s.results_by_ia[ia] || [];
+          if (list.some(m => normKey(m.id).endsWith('c') || normKey(m.label).includes('.c') || normKey(m.label).includes('(c)'))) {
+            is12Questions = true;
+            break;
+          }
+        }
+        if (is12Questions) break;
+      }
+
+      const qColumns = is12Questions
+        ? [
+            { id: '1a', label: '1.a' }, { id: '1b', label: '1.b' }, { id: '1c', label: '1.c' },
+            { id: '2a', label: '2.a' }, { id: '2b', label: '2.b' }, { id: '2c', label: '2.c' },
+            { id: '3a', label: '3.a' }, { id: '3b', label: '3.b' }, { id: '3c', label: '3.c' },
+            { id: '4a', label: '4.a' }, { id: '4b', label: '4.b' }, { id: '4c', label: '4.c' },
+          ]
+        : [
+            { id: '1a', label: '1.a' }, { id: '1b', label: '1.b' },
+            { id: '2a', label: '2.a' }, { id: '2b', label: '2.b' },
+            { id: '3a', label: '3.a' }, { id: '3b', label: '3.b' },
+            { id: '3b_alt', label: '3.b-alt' },
+            { id: '4a', label: '4.a' }, { id: '4b', label: '4.b' },
+          ];
+
+      const headerLine = [
+        'Sheet',
+        'Assessment',
+        ...qColumns.map(q => q.label),
+        'Total',
+        'Status',
+      ].join(',');
 
       const lines = [headerLine];
 
-      sheets.forEach((s) => {
-        const sLabel = `"${s.sheet_label || `Sheet ${s.sheet_index}`}"`;
-        const iaKeys = Object.keys(s.results_by_ia || {});
+      // Sort sheets in ascending numerical order
+      const sortedSheets = [...sheets].sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0));
+
+      sortedSheets.forEach((s) => {
+        const sLabel = `"${s.sheet_label || ('Sheet ' + (s.sheet_index || 1))}"`;
+        const resultsByIA = s.results_by_ia || {};
+
+        // Canonical assessment ordering: IA 1 -> IA 2 -> IA 3
+        const canonicalOrder = ['IA 1', 'IA 2', 'IA 3'];
+        const iaKeys = Object.keys(resultsByIA).sort((a, b) => {
+          const idxA = canonicalOrder.indexOf(a);
+          const idxB = canonicalOrder.indexOf(b);
+          if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+          if (idxA !== -1) return -1;
+          if (idxB !== -1) return 1;
+          return a.localeCompare(b);
+        });
 
         iaKeys.forEach((ia) => {
-          const marksList = s.results_by_ia[ia] || [];
+          const marksList = resultsByIA[ia] || [];
           const markMap = {};
           marksList.forEach((m) => {
-            markMap[m.label] = m;
+            if (m.id) markMap[normKey(m.id)] = m;
+            if (m.label) markMap[normKey(m.label)] = m;
           });
 
           const rowVals = [sLabel, `"${ia}"`];
 
-          qHeaders.forEach((qh) => {
-            const m = markMap[qh];
-            if (!m || m.is_blank || m.verified_val === null || m.verified_val === 0) {
-              rowVals.push('-');
-            } else {
+          qColumns.forEach((col) => {
+            const m = markMap[normKey(col.id)] || markMap[normKey(col.label)];
+            if (!m) {
+              rowVals.push('0');
+            } else if (m.verified_val !== null && m.verified_val !== undefined) {
               rowVals.push(String(m.verified_val));
+            } else if (m.numeric_val !== null && m.numeric_val !== undefined) {
+              rowVals.push(String(m.numeric_val));
+            } else {
+              rowVals.push('0');
             }
           });
 
-          const totMark = marksList.find((m) => m.id === 'total');
-          const totVal = totMark ? totMark.verified_val : 0;
-          rowVals.push(String(totVal));
-
+          // Summary totals
           const summary = (s.summary_totals && s.summary_totals[ia]) || {};
-          const status = summary.matches ? 'Verified Match' : 'Discrepancy';
+          const totMark = marksList.find((m) => normKey(m.id) === 'total' || normKey(m.label).includes('total'));
+          const calcSum = summary.calculated_sum !== undefined ? summary.calculated_sum : 0;
+          const detTotal = (totMark && totMark.verified_val !== null) ? totMark.verified_val : (summary.detected_total !== undefined && summary.detected_total !== null ? summary.detected_total : (calcSum || 0));
+
+          rowVals.push(String(detTotal));
+
+          const status = summary.matches ? 'Verified Match' : (summary.detected_total !== null && summary.detected_total !== undefined ? 'Discrepancy' : 'Valid');
           rowVals.push(`"${status}"`);
 
           lines.push(rowVals.join(','));
         });
       });
 
+      // UTF-8 BOM \ufeff ensures Excel and Numbers open with proper columns & character encoding
       const csvContent = '\ufeff' + lines.join('\r\n');
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       this._triggerDownload(blob, filename);
@@ -1682,80 +1806,190 @@
 
       const wb = XLSX.utils.book_new();
       const sheets = extractionData.sheets || [];
-      const qHeaders = [
-        '1.a', '1.b', '1.c',
-        '2.a', '2.b', '2.c',
-        '3.a', '3.b', '3.c',
-        '4.a', '4.b', '4.c',
-      ];
+      if (sheets.length === 0) return;
 
-      // Summary Sheet
+      const normKey = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      let is12Questions = false;
+      for (const s of sheets) {
+        for (const ia of Object.keys(s.results_by_ia || {})) {
+          const list = s.results_by_ia[ia] || [];
+          if (list.some(m => normKey(m.id).endsWith('c') || normKey(m.label).includes('.c') || normKey(m.label).includes('(c)'))) {
+            is12Questions = true;
+            break;
+          }
+        }
+        if (is12Questions) break;
+      }
+
+      const qColumns = is12Questions
+        ? [
+            { id: '1a', label: '1.a' }, { id: '1b', label: '1.b' }, { id: '1c', label: '1.c' },
+            { id: '2a', label: '2.a' }, { id: '2b', label: '2.b' }, { id: '2c', label: '2.c' },
+            { id: '3a', label: '3.a' }, { id: '3b', label: '3.b' }, { id: '3c', label: '3.c' },
+            { id: '4a', label: '4.a' }, { id: '4b', label: '4.b' }, { id: '4c', label: '4.c' },
+          ]
+        : [
+            { id: '1a', label: '1.a' }, { id: '1b', label: '1.b' },
+            { id: '2a', label: '2.a' }, { id: '2b', label: '2.b' },
+            { id: '3a', label: '3.a' }, { id: '3b', label: '3.b' },
+            { id: '3b_alt', label: '3.b-alt' },
+            { id: '4a', label: '4.a' }, { id: '4b', label: '4.b' },
+          ];
+
+      const sortedSheets = [...sheets].sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0));
+      const canonicalOrder = ['IA 1', 'IA 2', 'IA 3'];
+
+      // --- Worksheet 1: Summary Matrix ---
       const summaryRows = [
-        ['Continuous Internal Assessment (IA) Marks Evaluation Ledger'],
-        ['Generated via In-Browser Neural Extraction Engine'],
+        ['CONTINUOUS INTERNAL ASSESSMENT (IA) MARKS LEDGER'],
+        ['Generated via Neural Bluebook Extraction Engine | Verified Gradebook Matrix'],
         [],
-        ['Sheet', 'Assessment', ...qHeaders, 'Total', 'Status'],
+        ['Sheet / Student', 'Page', 'Assessment', ...qColumns.map(q => q.label), 'Calculated Total', 'Sheet Detected Total', 'Verification Status'],
       ];
 
-      sheets.forEach((s) => {
-        const sLabel = s.sheet_label || `Sheet ${s.sheet_index}`;
-        const iaKeys = Object.keys(s.results_by_ia || {});
+      sortedSheets.forEach((s) => {
+        const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
+        const pageNum = s.page_number || s.sheet_index || 1;
+        const resultsByIA = s.results_by_ia || {};
+
+        const iaKeys = Object.keys(resultsByIA).sort((a, b) => {
+          const idxA = canonicalOrder.indexOf(a);
+          const idxB = canonicalOrder.indexOf(b);
+          if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+          if (idxA !== -1) return -1;
+          if (idxB !== -1) return 1;
+          return a.localeCompare(b);
+        });
 
         iaKeys.forEach((ia) => {
-          const marksList = s.results_by_ia[ia] || [];
+          const marksList = resultsByIA[ia] || [];
           const markMap = {};
           marksList.forEach((m) => {
-            markMap[m.label] = m;
+            if (m.id) markMap[normKey(m.id)] = m;
+            if (m.label) markMap[normKey(m.label)] = m;
           });
 
-          const row = [sLabel, ia];
-          qHeaders.forEach((qh) => {
-            const m = markMap[qh];
-            if (!m || m.is_blank || m.verified_val === null || m.verified_val === 0) {
-              row.push('-');
+          const row = [sLabel, pageNum, ia];
+
+          qColumns.forEach((col) => {
+            const m = markMap[normKey(col.id)] || markMap[normKey(col.label)];
+            if (!m) {
+              row.push(0);
+            } else if (m.verified_val !== null && m.verified_val !== undefined) {
+              row.push(Number(m.verified_val));
+            } else if (m.numeric_val !== null && m.numeric_val !== undefined) {
+              row.push(Number(m.numeric_val));
             } else {
-              row.push(m.verified_val);
+              row.push(0);
             }
           });
 
-          const totMark = marksList.find((m) => m.id === 'total');
-          row.push(totMark ? totMark.verified_val : 0);
-
           const summary = (s.summary_totals && s.summary_totals[ia]) || {};
-          row.push(summary.matches ? 'Verified Match' : 'Discrepancy');
+          const totMark = marksList.find((m) => normKey(m.id) === 'total' || normKey(m.label).includes('total'));
+          const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
+          const detTotal = (totMark && totMark.verified_val !== null) ? Number(totMark.verified_val) : (summary.detected_total !== null && summary.detected_total !== undefined ? Number(summary.detected_total) : '-');
+
+          row.push(calcSum);
+          row.push(detTotal);
+
+          const status = summary.matches ? 'Verified Match' : (summary.detected_total !== null && summary.detected_total !== undefined ? 'Discrepancy Detected' : 'Evaluation Ready');
+          row.push(status);
+
           summaryRows.push(row);
         });
       });
 
       const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+      wsSummary['!cols'] = [
+        { wch: 22 }, { wch: 8 }, { wch: 18 },
+        ...qColumns.map(() => ({ wch: 8 })),
+        { wch: 16 }, { wch: 20 }, { wch: 22 },
+      ];
       XLSX.utils.book_append_sheet(wb, wsSummary, 'IA Marks Summary');
 
-      // Individual Sheets
-      sheets.forEach((s) => {
-        const sheetName = `Sheet ${s.sheet_index}`.substring(0, 31);
-        const detailRows = [
-          [`Assessment Marks Detail - ${s.sheet_label}`],
-          [],
-          ['Question', 'Assessment', 'Detected', 'Verified Mark', 'Status'],
-        ];
+      // --- Worksheet 2: Detailed Question Breakdown ---
+      const detailRows = [
+        ['DETAILED QUESTION BREAKDOWN AND RECOGNITION AUDIT'],
+        [],
+        ['Sheet', 'Page', 'Assessment', 'Question ID', 'Question Label', 'Maximum Marks', 'Raw Detected', 'Confidence (%)', 'Verified Mark', 'Status'],
+      ];
 
-        const iaKeys = Object.keys(s.results_by_ia || {});
+      sortedSheets.forEach((s) => {
+        const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
+        const pageNum = s.page_number || s.sheet_index || 1;
+        const resultsByIA = s.results_by_ia || {};
+
+        const iaKeys = Object.keys(resultsByIA).sort((a, b) => {
+          const idxA = canonicalOrder.indexOf(a);
+          const idxB = canonicalOrder.indexOf(b);
+          if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+          return a.localeCompare(b);
+        });
+
         iaKeys.forEach((ia) => {
-          const marksList = s.results_by_ia[ia] || [];
+          const marksList = resultsByIA[ia] || [];
           marksList.forEach((m) => {
+            const confPct = m.confidence !== null && m.confidence !== undefined ? Math.round(m.confidence * 100) : '-';
             detailRows.push([
-              m.label,
+              sLabel,
+              pageNum,
               ia,
-              m.detected_str,
-              m.verified_val,
-              m.status,
+              m.id || '',
+              m.label || '',
+              m.max || 10,
+              m.detected_str || '-',
+              confPct,
+              m.verified_val !== null ? m.verified_val : 0,
+              m.status || 'Valid',
             ]);
           });
         });
-
-        const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-        XLSX.utils.book_append_sheet(wb, wsDetail, sheetName);
       });
+
+      const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
+      wsDetail['!cols'] = [
+        { wch: 20 }, { wch: 8 }, { wch: 16 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 },
+      ];
+      XLSX.utils.book_append_sheet(wb, wsDetail, 'Detailed Breakdown');
+
+      // --- Worksheet 3: Discrepancy & Verification Audit ---
+      const auditRows = [
+        ['EXAMINATION INTEGRITY & TOTAL DISCREPANCY AUDIT'],
+        [],
+        ['Sheet', 'Assessment', 'Calculated Question Sum', 'Sheet Detected Total', 'Difference', 'Reconciliation Status'],
+      ];
+
+      sortedSheets.forEach((s) => {
+        const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
+        const resultsByIA = s.results_by_ia || {};
+        const iaKeys = Object.keys(resultsByIA).sort();
+
+        iaKeys.forEach((ia) => {
+          const summary = (s.summary_totals && s.summary_totals[ia]) || {};
+          const marksList = resultsByIA[ia] || [];
+          const totMark = marksList.find((m) => normKey(m.id) === 'total');
+          const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
+          const detTotal = totMark && totMark.verified_val !== null ? Number(totMark.verified_val) : (summary.detected_total !== null && summary.detected_total !== undefined ? Number(summary.detected_total) : null);
+          const diff = detTotal !== null ? Math.round((calcSum - detTotal) * 10) / 10 : '-';
+          const recStatus = detTotal === null ? 'No Sheet Total' : (Math.abs(calcSum - detTotal) < 0.01 ? 'Verified Match' : 'Discrepancy Flagged');
+
+          auditRows.push([
+            sLabel,
+            ia,
+            calcSum,
+            detTotal !== null ? detTotal : '-',
+            diff,
+            recStatus,
+          ]);
+        });
+      });
+
+      const wsAudit = XLSX.utils.aoa_to_sheet(auditRows);
+      wsAudit['!cols'] = [
+        { wch: 20 }, { wch: 16 }, { wch: 24 }, { wch: 22 }, { wch: 14 }, { wch: 24 },
+      ];
+      XLSX.utils.book_append_sheet(wb, wsAudit, 'Integrity Audit');
 
       XLSX.writeFile(wb, filename);
     }
@@ -1773,3 +2007,4 @@
 
   global.BrowserExtractionEngine = BrowserExtractionEngine;
 })(typeof window !== 'undefined' ? window : this);
+

@@ -758,9 +758,25 @@ class EvalSheetExtractor:
         current_row = 4
         for sheet in sheets:
             sheet_label = sheet.get("sheet_label") or f"Sheet {sheet.get('sheet_index', 1)}"
-            for ia_name, marks in sheet.get("results_by_ia", {}).items():
-                m_map = {m.get("id"): m for m in marks}
-                q_vals = [self._format_mark_display(m_map.get(qid)) for qid, _ in q_cols]
+            res_by_ia = sheet.get("results_by_ia", {})
+            sorted_ia_names = sorted(res_by_ia.keys(), key=lambda k: ["IA 1", "IA 2", "IA 3"].index(k) if k in ["IA 1", "IA 2", "IA 3"] else 99)
+            for ia_name in sorted_ia_names:
+                marks = res_by_ia[ia_name]
+                m_map = {}
+                for m in marks:
+                    m_id = str(m.get("id", "")).lower().replace(" ", "").replace(".", "")
+                    m_lbl = str(m.get("label", "")).lower().replace(" ", "").replace(".", "")
+                    if m_id:
+                        m_map[m_id] = m
+                    if m_lbl:
+                        m_map[m_lbl] = m
+
+                q_vals = []
+                for qid, qlbl in q_cols:
+                    k1 = str(qid).lower().replace(" ", "").replace(".", "")
+                    k2 = str(qlbl).lower().replace(" ", "").replace(".", "")
+                    m_obj = m_map.get(k1) or m_map.get(k2)
+                    q_vals.append(self._format_mark_display(m_obj))
                 tot_m = m_map.get("total")
                 tot_val = self._format_mark_display(tot_m)
 
@@ -987,24 +1003,62 @@ class EvalSheetExtractor:
         headers = ["Sheet", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
         writer.writerow(headers)
 
+        canonical_order = ["IA 1", "IA 2", "IA 3"]
+
+        def _sort_ias(ia_keys):
+            return sorted(ia_keys, key=lambda k: canonical_order.index(k) if k in canonical_order else 99)
+
         for sheet in sheets:
             sheet_label = sheet.get("sheet_label") or f"Sheet {sheet.get('sheet_index', 1)}"
-            for ia_name, marks in sheet.get("results_by_ia", {}).items():
-                m_map = {m.get("id"): m for m in marks}
-                q_vals = [self._format_mark_display(m_map.get(qid)) for qid, _ in q_cols]
+            res_by_ia = sheet.get("results_by_ia", {})
+            sorted_ias = _sort_ias(res_by_ia.keys())
+
+            for ia_name in sorted_ias:
+                marks = res_by_ia[ia_name]
+                m_map = {}
+                for m in marks:
+                    m_id = str(m.get("id", "")).lower().replace(" ", "").replace(".", "")
+                    m_lbl = str(m.get("label", "")).lower().replace(" ", "").replace(".", "")
+                    if m_id:
+                        m_map[m_id] = m
+                    if m_lbl:
+                        m_map[m_lbl] = m
+
+                q_vals = []
+                calc_sum = 0.0
+                for qid, qlbl in q_cols:
+                    k1 = str(qid).lower().replace(" ", "").replace(".", "")
+                    k2 = str(qlbl).lower().replace(" ", "").replace(".", "")
+                    m_obj = m_map.get(k1) or m_map.get(k2)
+                    v_str = self._format_mark_display(m_obj)
+                    q_vals.append(v_str)
+                    if v_str not in ("-", ""):
+                        try:
+                            calc_sum += float(v_str)
+                        except ValueError:
+                            pass
+
                 tot_m = m_map.get("total")
                 tot_val = self._format_mark_display(tot_m)
 
-                statuses = [m.get("status", "") for m in marks]
-                if any("Needs Review" in s or "Needs review" in s for s in statuses):
-                    row_status = "Needs Review"
-                elif any("Corrected" in s for s in statuses):
-                    row_status = "Corrected manually"
-                elif all(self._is_mark_unattempted(m) for m in marks if m.get("id") != "total"):
-                    row_status = "Blank"
-                else:
-                    row_status = "Valid"
+                summary = sheet.get("summary_totals", {}).get(ia_name, {})
+                det_total = summary.get("detected_total")
+                if det_total is None and tot_val not in ("-", ""):
+                    try:
+                        det_total = float(tot_val)
+                    except ValueError:
+                        det_total = None
 
-                writer.writerow([sheet_label, ia_name] + q_vals + [tot_val, row_status])
+                det_str = self._format_number_val(det_total) if det_total is not None else tot_val
+
+                calc_str = self._format_number_val(calc_sum)
+                if det_total is not None and abs(calc_sum - det_total) < 0.01:
+                    row_status = "Verified Match"
+                elif det_total is not None:
+                    row_status = "Discrepancy Detected"
+                else:
+                    row_status = "Evaluation Ready"
+
+                writer.writerow([sheet_label, ia_name] + q_vals + [tot_val if tot_val not in ("-", "") else calc_str, row_status])
 
         return out.getvalue()
