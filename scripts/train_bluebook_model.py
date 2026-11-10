@@ -226,9 +226,21 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                     cv2.ellipse(canvas, (27, 36), (9, 9), 10, -90, 130, 255, thickness, cv2.LINE_AA)
 
             elif digit == 4:
-                # 4: open-top trident 4, closed 4, or fast 4
-                style = np.random.choice(["open_top", "trident", "closed"])
-                if style == "open_top":
+                # 4: open-top trident 4, closed 4, fast 4, or slanted open 4
+                style = np.random.choice(["open_top", "trident", "closed", "slanted_open"], p=[0.30, 0.20, 0.15, 0.35])
+                if style == "slanted_open":
+                    # Evaluator 4 with diagonal left stroke sloping to horizontal bar and straight vertical stem
+                    x_top_l = np.random.randint(22, 28)
+                    y_top_l = np.random.randint(10, 15)
+                    x_bot_l = np.random.randint(14, 18)
+                    y_cross = np.random.randint(28, 33)
+                    cv2.line(canvas, (x_top_l, y_top_l), (x_bot_l, y_cross), 255, thickness, cv2.LINE_AA)
+                    x_stem_r = np.random.randint(30, 36)
+                    cv2.line(canvas, (x_bot_l, y_cross), (x_stem_r + 4, y_cross), 255, thickness, cv2.LINE_AA)
+                    y_top_r = np.random.randint(8, 14)
+                    y_bot_r = np.random.randint(42, 48)
+                    cv2.line(canvas, (x_stem_r, y_top_r), (x_stem_r, y_bot_r), 255, thickness, cv2.LINE_AA)
+                elif style == "open_top":
                     x_stem_left = np.random.randint(18, 23)
                     y_top_left = np.random.randint(12, 17)
                     y_cross = np.random.randint(28, 33)
@@ -304,8 +316,20 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                     cv2.ellipse(canvas, center, axes, 0, -80, 140, 255, thickness, cv2.LINE_AA)
 
             elif digit == 6:
-                cv2.line(canvas, (32, 12), (20, 32), 255, thickness, cv2.LINE_AA)
-                cv2.ellipse(canvas, (26, 35), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                style = np.random.choice(["std", "straight_ascender", "curved_ascender", "open_loop"], p=[0.35, 0.25, 0.25, 0.15])
+                if style == "straight_ascender":
+                    cv2.line(canvas, (34, 12), (18, 32), 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (26, 35), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                elif style == "curved_ascender":
+                    pts = np.array([[32, 12], [22, 20], [18, 32]], np.int32)
+                    cv2.polylines(canvas, [pts], False, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (26, 35), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                elif style == "open_loop":
+                    cv2.line(canvas, (32, 12), (18, 32), 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (26, 35), (9, 9), 0, -45, 270, 255, thickness, cv2.LINE_AA)
+                else:
+                    cv2.line(canvas, (32, 12), (20, 32), 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (26, 35), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
 
             elif digit == 7:
                 # 7: crossed 7 (dominant in Indian bluebooks, 85%+ frequency) or clean 7
@@ -344,9 +368,15 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
                         cv2.line(canvas, (cx_mid - bar_w // 2, cy_mid - tilt), (cx_mid + bar_w // 2, cy_mid + tilt), 255, bar_thick, cv2.LINE_AA)
 
             elif digit == 8:
-                # 8: continuous parametric S-curve, asymmetrical loops, or double-circle
-                style = np.random.choice(["scurve", "asymmetric", "circles", "waist"])
-                if style == "scurve":
+                # 8: continuous parametric S-curve, asymmetrical loops, double-circle, open top, or faint top
+                style = np.random.choice(["scurve", "asymmetric", "circles", "waist", "open_top_8", "faint_top_8"], p=[0.25, 0.20, 0.15, 0.15, 0.15, 0.10])
+                if style == "open_top_8":
+                    cv2.ellipse(canvas, (28, 20), (7, 7), 0, -90, 180, 255, thickness, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, 36), (9, 9), 0, 0, 360, 255, thickness, cv2.LINE_AA)
+                elif style == "faint_top_8":
+                    cv2.ellipse(canvas, (28, 20), (7, 7), 0, 0, 360, 255, 1, cv2.LINE_AA)
+                    cv2.ellipse(canvas, (28, 36), (9, 9), 0, 0, 360, 255, thickness + 1, cv2.LINE_AA)
+                elif style == "scurve":
                     cx, cy = 28 + np.random.randint(-2, 3), 28 + np.random.randint(-2, 3)
                     w_8 = np.random.randint(8, 12)
                     h_8 = np.random.randint(14, 18)
@@ -404,241 +434,92 @@ def generate_synthetic_messy_digits(samples_per_digit: int = 2500) -> tuple[np.n
 
 
 def harvest_real_bluebook_digits() -> tuple[np.ndarray, np.ndarray]:
-    """Harvest real handwritten crops with hysteresis thresholding."""
-    from src.eval_sheet_extractor import EvalSheetExtractor
-    ext = EvalSheetExtractor()
-
-    extractor_rows = [
-        ("1a", "1. a", 96, 141),
-        ("1b", "1. b", 141, 189),
-        ("1c", "1. c", 189, 236),
-        ("2a", "2. a", 236, 283),
-        ("2b", "2. b", 283, 331),
-        ("2c", "2. c", 331, 378),
-        ("3a", "3. a", 378, 425),
-        ("3b", "3. b", 425, 472),
-        ("3c", "3. c", 472, 520),
-        ("4a", "4. a", 520, 567),
-        ("4b", "4. b", 567, 614),
-        ("4c", "4. c", 614, 662),
-        ("total", "Total Marks", 662, 709),
-    ]
-    cols = {"IA 1": (95, 199), "IA 2": (294, 399)}
-
-    ground_truth = {
-        ("distribution_marks_sample_1.jpg", "IA 1", "1a"): "5",
-        ("distribution_marks_sample_1.jpg", "IA 1", "1b"): "2",
-        ("distribution_marks_sample_1.jpg", "IA 1", "4b"): "2",
-        ("distribution_marks_sample_1.jpg", "IA 2", "1a"): "7",
-        ("distribution_marks_sample_1.jpg", "IA 2", "3a"): "5",
-        ("distribution_marks_sample_1.jpg", "IA 2", "3b"): "3",
-        ("distribution_marks_sample_2.jpg", "IA 1", "1a"): "6",
-        ("distribution_marks_sample_2.jpg", "IA 1", "1b"): "4",
-        ("distribution_marks_sample_2.jpg", "IA 1", "4a"): "4",
-        ("distribution_marks_sample_2.jpg", "IA 1", "4b"): "4",
-        ("distribution_marks_sample_2.jpg", "IA 1", "4c"): "7",
-        ("distribution_marks_sample_2.jpg", "IA 2", "1a"): "8",
-        ("distribution_marks_sample_2.jpg", "IA 2", "1b"): "3",
-        ("distribution_marks_sample_2.jpg", "IA 2", "4a"): "5",
-        ("distribution_marks_sample_2.jpg", "IA 2", "4b"): "8",
-        ("distribution_marks_sample_3.jpg", "IA 1", "1a"): "5",
-        ("distribution_marks_sample_3.jpg", "IA 1", "1b"): "2",
-        ("distribution_marks_sample_3.jpg", "IA 1", "4b"): "2",
-        ("distribution_marks_sample_3.jpg", "IA 2", "1a"): "7",
-        ("distribution_marks_sample_3.jpg", "IA 2", "3a"): "5",
-        ("distribution_marks_sample_3.jpg", "IA 2", "3b"): "3",
-        ("bluebook_messy_1.png", "IA 1", "2a"): "1",
-        ("bluebook_messy_1.png", "IA 1", "2b"): "3",
-        ("bluebook_messy_1.png", "IA 1", "4a"): "2",
-        ("bluebook_messy_1.png", "IA 1", "4b"): "3",
-        ("bluebook_messy_1.png", "IA 1", "total"): "9",
-        ("bluebook_messy_1.png", "IA 2", "1a"): "6",
-        ("bluebook_messy_1.png", "IA 2", "1b"): "4",
-        ("bluebook_messy_1.png", "IA 2", "3a"): "4",
-        ("bluebook_messy_1.png", "IA 2", "3b"): "5",
-        ("bluebook_messy_2.png", "IA 1", "1a"): "3",
-        ("bluebook_messy_2.png", "IA 1", "total"): "3",
-        ("bluebook_messy_2.png", "IA 2", "1a"): "4",
-        ("bluebook_messy_2.png", "IA 2", "1b"): "2",
-        ("bluebook_messy_2.png", "IA 2", "4a"): "3",
-        ("bluebook_messy_2.png", "IA 2", "4b"): "5",
-        ("bluebook_messy_3.png", "IA 1", "1a"): "4",
-        ("bluebook_messy_3.png", "IA 1", "1b"): "2",
-        ("bluebook_messy_3.png", "IA 1", "4a"): "2",
-        ("bluebook_messy_3.png", "IA 1", "4b"): "4",
-        ("bluebook_messy_3.png", "IA 1", "4c"): "4",
-        ("bluebook_messy_3.png", "IA 2", "1a"): "8",
-        ("bluebook_messy_3.png", "IA 2", "1b"): "3",
-        ("bluebook_messy_3.png", "IA 2", "3a"): "3",
-        ("bluebook_messy_3.png", "IA 2", "3b"): "6",
-        ("bluebook_messy_4.png", "IA 1", "1a"): "5",
-        ("bluebook_messy_4.png", "IA 1", "1b"): "3",
-        ("bluebook_messy_4.png", "IA 1", "4a"): "3",
-        ("bluebook_messy_4.png", "IA 1", "4b"): "4",
-        ("bluebook_messy_4.png", "IA 1", "4c"): "6",
-        ("bluebook_messy_4.png", "IA 2", "1a"): "8",
-        ("bluebook_messy_4.png", "IA 2", "1b"): "4",
-        ("bluebook_messy_4.png", "IA 2", "3a"): "5",
-        ("bluebook_messy_4.png", "IA 2", "3b"): "7",
-        ("bluebook_messy_5.png", "IA 1", "1a"): "5",
-        ("bluebook_messy_5.png", "IA 1", "1b"): "1",
-        ("bluebook_messy_5.png", "IA 1", "3b"): "1",
-        ("bluebook_messy_5.png", "IA 1", "3c"): "6",
-        ("bluebook_messy_5.png", "IA 2", "1a"): "6",
-        ("bluebook_messy_5.png", "IA 2", "1b"): "3",
-        ("bluebook_messy_5.png", "IA 2", "4a"): "4",
-        ("bluebook_messy_5.png", "IA 2", "4b"): "2",
-    }
-
+    """Harvest and massively augment all real handwritten crops from data/real_digits."""
+    real_digits_dir = BASE_DIR / "data" / "real_digits"
     x_list = []
     y_list = []
 
     k_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
 
-    for (fn, ia, qid), target_str in ground_truth.items():
-        img_path = SAMPLE_DIR / fn
-        if not img_path.exists():
+    if not real_digits_dir.exists():
+        print(f"Warning: {real_digits_dir} not found.")
+        return np.zeros((0, 1, 28, 28), dtype=np.float32), np.zeros((0,), dtype=np.int64)
+
+    raw_crops_by_digit = {d: [] for d in range(10)}
+
+    for d in range(10):
+        d_dir = real_digits_dir / str(d)
+        if not d_dir.exists():
             continue
-        img = cv2.imread(str(img_path))
-        warped = ext._detect_distribution_of_marks(img)
-        if warped is None:
+        for f in sorted(d_dir.glob("*.png")):
+            c_img = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+            if c_img is None:
+                continue
+            norm = center_and_scale_to_28(c_img)
+            if norm is None:
+                norm = cv2.resize(c_img, (28, 28), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+            raw_crops_by_digit[d].append(norm)
+
+    total_raw = sum(len(v) for v in raw_crops_by_digit.values())
+    print(f"Found {total_raw} real digit crops across classes 0-9:")
+    for d in range(10):
+        print(f"  Digit {d}: {len(raw_crops_by_digit[d])} real samples")
+
+    # Target roughly 4,000 augmented samples per class for real bluebook digits
+    for d in range(10):
+        crops = raw_crops_by_digit[d]
+        if not crops:
             continue
+        # Multiplier to reach ~4,000 samples per digit
+        augs_per_crop = max(200, 4000 // len(crops))
 
-        y1, y2 = next(r[2:] for r in extractor_rows if r[0] == qid)
-        x1, x2 = cols[ia]
-        cell = warped[y1 + 5 : y2 - 5, x1 + 6 : x2 - 6]
+        for base_canvas in crops:
+            x_list.append(base_canvas)
+            y_list.append(d)
 
-        b, g, r = cv2.split(cell)
-        diff = r.astype(float) - np.maximum(b.astype(float), g.astype(float))
-        bg_diff = np.median(diff[4:-4, 4:-4])
+            base_u8 = (base_canvas * 255.0).astype(np.uint8)
 
-        high_th = max(10, bg_diff + 7)
-        low_th = max(5, bg_diff + 3)
+            for _ in range(augs_per_crop):
+                # 1. Random rotation (-16 to +16 deg)
+                ang = float(np.random.uniform(-16.0, 16.0))
+                M_rot = cv2.getRotationMatrix2D((14, 14), ang, 1.0)
+                aug = cv2.warpAffine(base_u8, M_rot, (28, 28), flags=cv2.INTER_LINEAR)
 
-        strong = (diff >= high_th) & (r > 75)
-        weak = (diff >= low_th) & (r > 75)
+                # 2. Random affine shear / slant
+                shear_x = float(np.random.uniform(-0.20, 0.20))
+                M_shear = np.float32([[1, shear_x, -shear_x * 14], [0, 1, 0]])
+                aug = cv2.warpAffine(aug, M_shear, (28, 28), flags=cv2.INTER_LINEAR)
 
-        num_labels, labels = cv2.connectedComponents(weak.astype(np.uint8))
-        mask = np.zeros_like(weak, dtype=np.uint8)
-        for lbl in range(1, num_labels):
-            if np.any(strong[labels == lbl]):
-                mask[labels == lbl] = 255
+                # 3. Random translation (-3 to +3 px)
+                tx = int(np.random.randint(-3, 4))
+                ty = int(np.random.randint(-3, 4))
+                M_trans = np.float32([[1, 0, tx], [0, 1, ty]])
+                aug = cv2.warpAffine(aug, M_trans, (28, 28), flags=cv2.INTER_LINEAR)
 
-        # Shave 2px border
-        mask[:2, :] = 0; mask[-2:, :] = 0; mask[:, :2] = 0; mask[:, -2:] = 0
-
-        cnt = cv2.countNonZero(mask)
-        if cnt < 15:
-            continue
-
-        if not target_str.isdigit():
-            continue
-
-        target_digit = int(target_str)
-        base_canvas = center_and_scale_to_28(mask)
-        if base_canvas is None:
-            continue
-
-        x_list.append(base_canvas)
-        y_list.append(target_digit)
-
-        # Generate 50 augmented variations per real crop
-        for _ in range(50):
-            ang = float(np.random.uniform(-14.0, 14.0))
-            M = cv2.getRotationMatrix2D((14, 14), ang, 1.0)
-            aug = cv2.warpAffine((base_canvas * 255).astype(np.uint8), M, (28, 28), flags=cv2.INTER_LINEAR)
-
-            tx = np.random.randint(-2, 3)
-            ty = np.random.randint(-2, 3)
-            M_trans = np.float32([[1, 0, tx], [0, 1, ty]])
-            aug = cv2.warpAffine(aug, M_trans, (28, 28))
-
-            if np.random.rand() < 0.35:
-                aug = cv2.dilate(aug, k_dilate, iterations=1)
-            elif np.random.rand() < 0.15:
-                aug = cv2.erode(aug, k_dilate, iterations=1)
-
-            x_list.append(aug.astype(np.float32) / 255.0)
-            y_list.append(target_digit)
-
-    # Direct injection and massive augmentation of user failure-case snippets
-    direct_snippets = [
-        ("real_sample1_IA2_1a.png", 7, 1000),  # Evaluator crossed 7 with hook & bar
-        ("real_sample2_IA2_1b.png", 2, 1000),  # Evaluator cursive 2
-        ("real_sample3_IA2_1a.png", 7, 1000),  # Evaluator crossed 7
-        ("real_sample3_IA2_3b.png", 3, 1000),  # Evaluator cursive 3
-        ("real_sample2_IA2_4a.png", 5, 1000),  # Evaluator 5
-        ("real_sample2_IA2_4b.png", 8, 1000),  # Evaluator 8
-        ("debug_s8_3a.png", 5, 1000),          # Evaluator 5 with straight top stroke
-        ("debug_s8_3b.png", 3, 1000),          # Evaluator cursive 3 with curled top loop
-        ("debug_fail_s10_4a_5.png", 5, 1000),  # Evaluator slanted detached 5
-        ("debug_fail_s10_4b_8.png", 8, 1000),  # Evaluator figure 8
-        ("debug_fail_s7_1a_7.png", 7, 1000),   # Evaluator crossed 7
-        ("debug_fail_s7_1b_3.png", 3, 1000),   # Evaluator open 3
-        ("debug_fail_24_right4.png", 4, 1000), # Evaluator open-top 4 in Total 24
-        ("debug_fail_24_left2.png", 2, 1000),  # Evaluator cursive 2 in Total 24
-        ("debug_fail_total_23_left2.png", 2, 800),  # Left 2 of total 23
-        ("debug_fail_total_23_right3.png", 3, 800), # Right 3 of total 23
-        ("user_fail_im2_box_0.png", 5, 1000),  # Evaluator slanted detached 5 in 4.a
-        ("user_fail_im1_crop_0.png", 5, 900),  # Evaluator cursive 5 misclassified as 6
-        ("user_fail_im1_crop_1.png", 3, 900),  # Evaluator open curved 3 misclassified as 8
-        ("user_fail_im3_crop_0.png", 7, 900),  # Evaluator slanted crossed 7 misclassified as 8
-        ("user_fail_im3_crop_1.png", 3, 900),  # Evaluator cursive 3 misclassified as 8
-        ("debug_fail_total_2.png", 2, 700),    # Evaluator total marks '2' in 23
-        ("debug_fail_total_3.png", 3, 700),    # Evaluator total marks '3' in 23
-        ("user_snip_1a.png", 7, 600),          # Crossed 7 misclassified as 8/4
-        ("user_snip_1b.png", 3, 600),          # Open curved 3 misclassified as 8
-        ("debug_user_total_2.png", 2, 500),    # Left '2' of total 23
-        ("debug_user_total_3.png", 3, 500),    # Right '3' of total 23
-        ("debug_sim_4b.png", 8, 500),          # Real figure-8 from test sheets
-        ("debug_cell_ia2_1a.png", 8, 500),     # Real figure-8
-        ("debug_cell_ia2_3b.png", 3, 500),     # Real open 3
-        ("debug_split47_l.png", 2, 400),       # Real 2 from total 24
-        ("debug_split47_r.png", 4, 400),       # Real 4 from total 24
-    ]
-
-    for fn, label, num_augs in direct_snippets:
-        fp = BASE_DIR / fn
-        if not fp.exists():
-            continue
-        c_img = cv2.imread(str(fp))
-        if c_img is None:
-            continue
-        is_grayscale = (len(c_img.shape) == 2) or np.all(c_img[:, :, 0] == c_img[:, :, 1])
-        if is_grayscale:
-            mask_snip = c_img[:, :, 0] if len(c_img.shape) == 3 else c_img
-            c_norm = center_and_scale_to_28(mask_snip)
-        else:
-            b, g, r = cv2.split(c_img)
-            diff = r.astype(float) - np.maximum(b.astype(float), g.astype(float))
-            bg_diff = np.median(diff[2:-2, 2:-2])
-            strong = (diff >= max(9, bg_diff + 6)) & (r > 60)
-            weak = (diff >= max(4, bg_diff + 3)) & (r > 60)
-            num_labels, labels_cc = cv2.connectedComponents(weak.astype(np.uint8))
-            mask_snip = np.zeros_like(weak, dtype=np.uint8)
-            for lbl in range(1, num_labels):
-                if np.any(strong[labels_cc == lbl]):
-                    mask_snip[labels_cc == lbl] = 255
-            if mask_snip.sum() < 30:
-                gray = cv2.cvtColor(c_img, cv2.COLOR_BGR2GRAY)
-                mask_snip = (gray < 160).astype(np.uint8) * 255
-            c_norm = center_and_scale_to_28(mask_snip)
-
-        if c_norm is not None:
-            x_list.append(c_norm)
-            y_list.append(label)
-            for _ in range(num_augs):
-                ang = float(np.random.uniform(-15.0, 15.0))
-                M = cv2.getRotationMatrix2D((14, 14), ang, 1.0)
-                aug = cv2.warpAffine((c_norm * 255).astype(np.uint8), M, (28, 28), flags=cv2.INTER_LINEAR)
-                tx, ty = np.random.randint(-2, 3), np.random.randint(-2, 3)
-                aug = cv2.warpAffine(aug, np.float32([[1, 0, tx], [0, 1, ty]]), (28, 28))
-                if np.random.rand() < 0.35:
+                # 4. Random stroke dilation / erosion
+                p_morph = np.random.rand()
+                if p_morph < 0.35:
                     aug = cv2.dilate(aug, k_dilate, iterations=1)
-                elif np.random.rand() < 0.15:
+                elif p_morph < 0.50:
                     aug = cv2.erode(aug, k_dilate, iterations=1)
-                x_list.append(aug.astype(np.float32) / 255.0)
-                y_list.append(label)
+
+                # 5. Random stroke dropout (simulating faint red ink)
+                if np.random.rand() < 0.15:
+                    drop_mask = (np.random.rand(28, 28) > 0.12).astype(np.uint8)
+                    aug = aug * drop_mask
+
+                processed = center_and_scale_to_28(aug)
+                if processed is not None:
+                    x_list.append(processed)
+                    y_list.append(d)
+                else:
+                    x_list.append(aug.astype(np.float32) / 255.0)
+                    y_list.append(d)
+
+    print(f"Harvested and augmented {len(x_list)} real bluebook handwriting samples.")
+    x_arr = np.array(x_list, dtype=np.float32)[:, np.newaxis, :, :]
+    y_arr = np.array(y_list, dtype=np.int64)
+    return x_arr, y_arr
 
     print(f"Harvested and augmented {len(x_list)} real bluebook handwriting samples.")
     x_arr = np.array(x_list, dtype=np.float32)[:, np.newaxis, :, :]
@@ -734,16 +615,16 @@ def train_and_export():
     train_ds = TensorDataset(torch.from_numpy(all_train_x), torch.from_numpy(all_train_y))
     test_ds = TensorDataset(torch.from_numpy(mnist_test_x), torch.from_numpy(mnist_test_y))
 
-    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
+    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=256, shuffle=False)
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Training on device: {device}")
 
     model = DeepBluebookCNN().to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.03)
     optimizer = optim.AdamW(model.parameters(), lr=0.002, weight_decay=1e-4)
-    epochs = 7
+    epochs = 8
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
 
     print(f"Beginning DeepBluebookCNN model training for {epochs} epochs...")
@@ -784,6 +665,37 @@ def train_and_export():
 
     test_acc = (test_correct / test_total) * 100.0
     print(f"Final Test Accuracy on MNIST test benchmark: {test_acc:.2f}%")
+
+    # Evaluate directly on all raw real crops
+    real_digits_dir = BASE_DIR / "data" / "real_digits"
+    real_correct = 0
+    real_total = 0
+    misclassified_real = []
+    with torch.no_grad():
+        for d in range(10):
+            d_dir = real_digits_dir / str(d)
+            if not d_dir.exists():
+                continue
+            for f in sorted(d_dir.glob("*.png")):
+                c_img = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+                if c_img is None:
+                    continue
+                norm = center_and_scale_to_28(c_img)
+                if norm is None:
+                    norm = cv2.resize(c_img, (28, 28), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+                t_in = torch.from_numpy(norm).unsqueeze(0).unsqueeze(0).to(device)
+                pred = torch.argmax(model(t_in), dim=1).item()
+                real_total += 1
+                if pred == d:
+                    real_correct += 1
+                else:
+                    misclassified_real.append((d, pred, f.name))
+    real_acc = (real_correct / max(1, real_total)) * 100.0
+    print(f"Accuracy on raw real bluebook crops: {real_correct}/{real_total} ({real_acc:.2f}%)")
+    if misclassified_real:
+        print("Misclassified real samples:")
+        for td, pd, fn in misclassified_real:
+            print(f"  True {td} -> Pred {pd} : {fn}")
 
     # Export to ONNX with ExportWrapper (attaches Softmax)
     print(f"Exporting updated model to ONNX: {MODEL_PATH}")

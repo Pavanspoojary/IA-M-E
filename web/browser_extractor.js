@@ -506,11 +506,10 @@
         gray = new cv.Mat();
         cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
         bw = new cv.Mat();
-        cv.adaptiveThreshold(gray, bw, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, 15, 2);
+        cv.adaptiveThreshold(gray, bw, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 15, 5);
 
-        // Detect horizontal grid lines
-        const kHw = Math.max(20, Math.round(W / 10));
-        hKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kHw, 1));
+        // 1. Detect horizontal grid lines
+        hKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(30, 1));
         hLines = new cv.Mat();
         cv.morphologyEx(bw, hLines, cv.MORPH_OPEN, hKernel);
 
@@ -518,139 +517,109 @@
         for (let y = 0; y < H; y++) {
           let sum = 0;
           const rowStart = y * W;
-          for (let x = 0; x < W; x++) {
+          for (let x = 50; x < 150 && x < W; x++) {
             if (hLines.data[rowStart + x] > 0) sum++;
           }
           hProj[y] = sum;
         }
 
-        const detectedY = [];
-        for (let y = 1; y < H - 1; y++) {
-          if (hProj[y] > W * 0.22 && hProj[y] >= hProj[y - 1] && hProj[y] >= hProj[y + 1]) {
-            if (detectedY.length === 0 || (y - detectedY[detectedY.length - 1]) > 20) {
-              detectedY.push(y);
-            }
+        // Find yStart and yEnd peaks
+        let yStart = 93;
+        let maxS = -1;
+        for (let y = 80; y <= 110 && y < H; y++) {
+          if (hProj[y] > maxS) {
+            maxS = hProj[y];
+            yStart = y;
           }
         }
+        let yEnd = 709;
+        let maxE = -1;
+        for (let y = 690; y <= 725 && y < H; y++) {
+          if (hProj[y] > maxE) {
+            maxE = hProj[y];
+            yEnd = y;
+          }
+        }
+        const avgRowH = (yEnd - yStart) / 13.0;
 
-        // Detect vertical lines
-        const kVh = Math.max(20, Math.round(H / 15));
-        vKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, kVh));
+        const rowPeaks = [yStart];
+        for (let k = 1; k < 13; k++) {
+          const expY = Math.round(yStart + k * avgRowH);
+          const wLow = Math.max(0, expY - 10);
+          const wHigh = Math.min(H - 1, expY + 10);
+          let bestY = expY;
+          let maxP = -1;
+          for (let y = wLow; y <= wHigh; y++) {
+            if (hProj[y] > maxP) {
+              maxP = hProj[y];
+              bestY = y;
+            }
+          }
+          rowPeaks.push(maxP > 20 ? bestY : expY);
+        }
+        rowPeaks.push(yEnd);
+
+        const rowKeys = ['1a', '1b', '1c', '2a', '2b', '2c', '3a', '3b', '3c', '4a', '4b', '4c', 'total'];
+        const newRows = [];
+        for (let r = 0; r < rowKeys.length; r++) {
+          newRows.push({
+            id: rowKeys[r],
+            label: DOM_ROWS[r].label,
+            y1: rowPeaks[r],
+            y2: Math.max(rowPeaks[r] + 35, rowPeaks[r + 1]),
+            max: DOM_ROWS[r].max,
+          });
+        }
+
+        // 2. Detect vertical grid lines
+        vKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, 30));
         vLines = new cv.Mat();
         cv.morphologyEx(bw, vLines, cv.MORPH_OPEN, vKernel);
 
         const vProj = new Float32Array(W);
         for (let x = 0; x < W; x++) {
           let sum = 0;
-          for (let y = 0; y < H; y++) {
+          for (let y = 150; y < 650 && y < H; y++) {
             if (vLines.data[y * W + x] > 0) sum++;
           }
           vProj[x] = sum;
         }
 
-        const detectedX = [];
-        for (let x = 1; x < W - 1; x++) {
-          if (vProj[x] > H * 0.30 && vProj[x] >= vProj[x - 1] && vProj[x] >= vProj[x + 1]) {
-            if (detectedX.length === 0 || (x - detectedX[detectedX.length - 1]) > 35) {
-              detectedX.push(x);
-            }
-          }
-        }
-
-        const isSingleColumn = (W / H < 0.45) || (detectedX.length <= 3 && detectedX.length >= 1);
-
-        let dynamicRows = DOM_ROWS;
-        // Find the line separating header rows from Question 1.a
-        // Strategy:
-        // 1. If bottom Total Marks line exists near y ≈ 630..680, count 12 rows UP:
-        let totalTopY = -1;
-        for (let i = detectedY.length - 1; i >= 0; i--) {
-          if (detectedY[i] >= 630 && detectedY[i] <= 680) {
-            totalTopY = detectedY[i];
-            break;
-          }
-        }
-
-        let headerY = -1;
-        if (totalTopY > 0) {
-          const expectedHeaderY = Math.round(totalTopY - 12 * 46.8);
-          let minDiff = Infinity;
-          for (let i = 0; i < detectedY.length; i++) {
-            const diff = Math.abs(detectedY[i] - expectedHeaderY);
-            if (diff < minDiff && diff < 24) {
-              minDiff = diff;
-              headerY = detectedY[i];
-            }
-          }
-        }
-
-        // 2. If not found, look for candidate lines near nominal 90..100,
-        // strictly skipping any top table border line (y < 65) that might be above "First I.A. Test"
-        if (headerY < 0) {
-          let minDiff = Infinity;
-          for (let i = 0; i < detectedY.length; i++) {
-            if (detectedY[i] < 65) continue; // Skip title border lines
-            const diff = Math.abs(detectedY[i] - 93);
-            if (diff < minDiff && diff < 20) {
-              minDiff = diff;
-              headerY = detectedY[i];
-            }
-          }
-        }
-        if (headerY < 0) headerY = 93;
-
-        const rowKeys = ['1a', '1b', '1c', '2a', '2b', '2c', '3a', '3b', '3c', '4a', '4b', '4c', 'total'];
-        const newRows = [];
-        const avgRowH = 47.1;
-
-        // Helper to find nearest detected grid line to a nominal target y
-        const snapToLine = (targetY) => {
-          let best = targetY;
-          let bestDist = 12; // snap radius
-          for (let i = 0; i < detectedY.length; i++) {
-            const dist = Math.abs(detectedY[i] - targetY);
-            if (dist < bestDist) {
-              bestDist = dist;
-              best = detectedY[i];
-            }
-          }
-          return best;
-        };
-
-        for (let r = 0; r < rowKeys.length; r++) {
-          const nominalY1 = Math.round(headerY + r * avgRowH);
-          const nominalY2 = Math.round(headerY + (r + 1) * avgRowH);
-          const y1 = snapToLine(nominalY1);
-          const y2 = snapToLine(nominalY2);
-
-          newRows.push({
-            id: rowKeys[r],
-            label: DOM_ROWS[r].label,
-            y1,
-            y2: Math.max(y1 + 35, y2),
-            max: DOM_ROWS[r].max,
-          });
-        }
-        dynamicRows = newRows;
-
+        const isSingleColumn = (W / H < 0.45);
         let dynamicCols = DOM_COLUMNS;
+
         if (isSingleColumn) {
-          const midX = detectedX.length > 0 ? detectedX[0] : Math.round(W * 0.46);
+          const midX = Math.round(W * 0.46);
           const marksRange = [Math.max(0, midX + 2), W - 4];
           dynamicCols = {
             'IA 1': { colRange: [0, W], marksX: marksRange },
             'IA 2': { colRange: [0, W], marksX: marksRange },
             'IA 3': { colRange: [0, W], marksX: marksRange },
           };
-        } else if (detectedX.length >= 5) {
+        } else {
+          const expectedV = [0, 95, 199, 295, 399, 495, 599];
+          const vSnapped = [];
+          for (const expX of expectedV) {
+            const wLow = Math.max(0, expX - 12);
+            const wHigh = Math.min(W - 1, expX + 12);
+            let bestX = expX;
+            let maxVal = -1;
+            for (let x = wLow; x <= wHigh; x++) {
+              if (vProj[x] > maxVal) {
+                maxVal = vProj[x];
+                bestX = x;
+              }
+            }
+            vSnapped.push(maxVal > 50 ? bestX : expX);
+          }
           dynamicCols = {
-            'IA 1': { colRange: [0, detectedX[1]], marksX: [detectedX[0], detectedX[1]] },
-            'IA 2': { colRange: [detectedX[1], detectedX[3]], marksX: [detectedX[2], detectedX[3]] },
-            'IA 3': { colRange: [detectedX[3], W], marksX: [detectedX[4], Math.min(W, detectedX[4] + (detectedX[3] - detectedX[2]))] },
+            'IA 1': { colRange: [vSnapped[0], vSnapped[2]], marksX: [vSnapped[1], vSnapped[2]] },
+            'IA 2': { colRange: [vSnapped[2], vSnapped[4]], marksX: [vSnapped[3], vSnapped[4]] },
+            'IA 3': { colRange: [vSnapped[4], vSnapped[6]], marksX: [vSnapped[5], vSnapped[6]] },
           };
         }
 
-        return { rows: dynamicRows, columns: dynamicCols, isSingleColumn };
+        return { rows: newRows, columns: dynamicCols, isSingleColumn };
       } catch (e) {
         console.warn('Grid line detection error, using defaults:', e);
         return { rows: DOM_ROWS, columns: DOM_COLUMNS, isSingleColumn: false };
@@ -666,223 +635,206 @@
     }
 
     /**
-     * Extract red-pen strokes and check strikeout status.
-     * Uses adaptive background thresholding to eliminate paper tint and shadow false-positives.
+     * Extract handwritten strokes and check strikeout status.
+     * Uses OpenCV.js connected component analysis when available with adaptive background thresholding.
      */
     processCellInk(cellCanvas, row) {
       const w = cellCanvas.width;
       const h = cellCanvas.height;
+
+      // 1. High-accuracy OpenCV.js pipeline
+      if (typeof cv !== 'undefined' && cv.Mat && cv.adaptiveThreshold && cv.connectedComponentsWithStats) {
+        const inner = document.createElement('canvas');
+        inner.width = Math.max(1, w - 6);
+        inner.height = Math.max(1, h - 4);
+        const ictx = inner.getContext('2d', { willReadFrequently: true });
+        ictx.drawImage(cellCanvas, 3, 2, inner.width, inner.height, 0, 0, inner.width, inner.height);
+        const idata = ictx.getImageData(0, 0, inner.width, inner.height).data;
+        const iw = inner.width;
+        const ih = inner.height;
+        let redCount = 0;
+        const isRed = new Uint8Array(iw * ih);
+
+        for (let i = 0; i < iw * ih; i++) {
+          const r = idata[i * 4];
+          const g = idata[i * 4 + 1];
+          const b = idata[i * 4 + 2];
+          const diff = r - Math.max(g, b);
+          if (diff >= 3.0 || r >= g + 2.0) {
+            isRed[i] = 1;
+            redCount++;
+          }
+        }
+
+        const mask = new Uint8Array(w * h);
+        if (redCount < 10) {
+          // Check central dark ink (blue/black pen)
+          let darkCount = 0;
+          for (let y = Math.floor(ih * 0.15); y < Math.floor(ih * 0.85); y++) {
+            const rOff = y * iw * 4;
+            for (let x = Math.floor(iw * 0.15); x < Math.floor(iw * 0.85); x++) {
+              const idx = rOff + x * 4;
+              const lum = 0.299 * idata[idx] + 0.587 * idata[idx + 1] + 0.114 * idata[idx + 2];
+              if (lum < 110) darkCount++;
+            }
+          }
+          if (darkCount < 12) {
+            return { isBlank: true, isStrikeout: false, mask, minX: 0, maxX: 0, minY: 0, maxY: 0, rw: 0, rh: 0, w, h };
+          }
+        }
+
+        let mat = null, gray = null, blur = null, th = null, labels = null, stats = null, centroids = null;
+        try {
+          mat = cv.imread(inner);
+          gray = new cv.Mat();
+          cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+          blur = new cv.Mat();
+          cv.GaussianBlur(gray, blur, new cv.Size(3, 3), 0);
+          th = new cv.Mat();
+          cv.adaptiveThreshold(blur, th, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 15, 8);
+
+          if (redCount >= 10) {
+            for (let i = 0; i < iw * ih; i++) {
+              if (!isRed[i]) th.data[i] = 0;
+            }
+          }
+
+          labels = new cv.Mat();
+          stats = new cv.Mat();
+          centroids = new cv.Mat();
+          const numL = cv.connectedComponentsWithStats(th, labels, stats, centroids);
+
+          for (let l = 1; l < numL; l++) {
+            const cx = stats.intAt(l, cv.CC_STAT_LEFT);
+            const cy = stats.intAt(l, cv.CC_STAT_TOP);
+            const cw = stats.intAt(l, cv.CC_STAT_WIDTH);
+            const ch = stats.intAt(l, cv.CC_STAT_HEIGHT);
+            const area = stats.intAt(l, cv.CC_STAT_AREA);
+
+            const isEdgeShaving = (
+              ((cy <= 4 || (cy + ch) >= ih - 4) && ch <= 4 && area <= 30) ||
+              ((cx <= 4 || (cx + cw) >= iw - 4) && cw <= 5 && area <= 30) ||
+              (cy <= 2 && ch <= 2) ||
+              ((cy + ch) >= ih - 2 && ch <= 2) ||
+              (cx <= 2 && cw <= 2) ||
+              ((cx + cw) >= iw - 2 && cw <= 2)
+            );
+            const isHBorder = (cy <= 3 || (cy + ch) >= ih - 3) && (ch <= 6 && (cw >= 25 || cw / Math.max(1, ch) >= 3.0));
+            const isVBorder = (cx <= 2 || (cx + cw) >= iw - 2) && (ch >= 20 && ch / Math.max(1, cw) >= 2.5);
+            const isSpeck = area < 8;
+
+            if (isEdgeShaving || isHBorder || isVBorder || isSpeck) {
+              for (let i = 0; i < iw * ih; i++) {
+                if (labels.intAt(Math.floor(i / iw), i % iw) === l) {
+                  th.data[i] = 0;
+                }
+              }
+            }
+          }
+
+          let minX = w, maxX = -1, minY = h, maxY = -1;
+          let validCount = 0;
+          for (let y = 0; y < ih; y++) {
+            const origY = y + 2;
+            for (let x = 0; x < iw; x++) {
+              if (th.data[y * iw + x] > 0) {
+                const origX = x + 3;
+                mask[origY * w + origX] = 1;
+                validCount++;
+                if (origX < minX) minX = origX;
+                if (origX > maxX) maxX = origX;
+                if (origY < minY) minY = origY;
+                if (origY > maxY) maxY = origY;
+              }
+            }
+          }
+
+          if (validCount < 12 || minX > maxX || minY > maxY) {
+            return { isBlank: true, isStrikeout: false, mask, minX: 0, maxX: 0, minY: 0, maxY: 0, rw: 0, rh: 0, w, h };
+          }
+
+          const rw = maxX - minX + 1;
+          const rh = maxY - minY + 1;
+          const ratio = rw / Math.max(1, rh);
+          const isTotal = row && (row.id === 'total' || (row.max && row.max > 10.0));
+          const isDash = !isTotal && (
+            (rw >= 40 && ratio >= 3.5) ||
+            (rw >= 20 && ratio >= 3.5 && rh <= 15) ||
+            (rh <= 5 && rw >= 8 && ratio >= 2.0) ||
+            (rh <= 6 && validCount <= 30 && ratio >= 2.0)
+          );
+
+          return {
+            isBlank: false,
+            isStrikeout: isDash,
+            mask,
+            minX, maxX, minY, maxY,
+            rw, rh,
+            w, h
+          };
+        } finally {
+          if (mat) mat.delete();
+          if (gray) gray.delete();
+          if (blur) blur.delete();
+          if (th) th.delete();
+          if (labels) labels.delete();
+          if (stats) stats.delete();
+          if (centroids) centroids.delete();
+        }
+      }
+
+      // 2. Pure JS fallback with strict red-ink masking
       const ctx = cellCanvas.getContext('2d', { willReadFrequently: true });
       const imgData = ctx.getImageData(0, 0, w, h);
       const data = imgData.data;
+      const mask = new Uint8Array(w * h);
+      let minX = w, maxX = -1, minY = h, maxY = -1;
+      let validCount = 0;
 
-      // 1. Compute ambient paper background red difference median
-      // Sample inner region (shave 2px to avoid border lines)
-      const diffValues = [];
-      for (let y = 2; y < h - 2; y += 2) {
+      for (let y = 3; y < h - 3; y++) {
         const rowOffset = y * w;
-        for (let x = 2; x < w - 2; x += 2) {
-          const idx = (rowOffset + x) * 4;
-          const r = data[idx];
-          const g = data[idx + 1];
-          const b = data[idx + 2];
-          diffValues.push(r - Math.max(g, b));
-        }
-      }
-      diffValues.sort((a, b) => a - b);
-      const bgDiff = diffValues.length > 0 ? diffValues[Math.floor(diffValues.length * 0.5)] : 0;
-      const highThresh = Math.max(9, bgDiff + 7);
-      const lowThresh = Math.max(4, bgDiff + 3);
-
-      // Two-pass hysteresis thresholding:
-      // Pass 1: detect strong red seeds and candidate weak pixels
-      const strongMask = new Uint8Array(w * h);
-      const weakMask = new Uint8Array(w * h);
-      let strongCount = 0;
-      let darkCount = 0;
-
-      for (let y = 2; y < h - 2; y++) {
-        const rowOffset = y * w;
-        for (let x = 2; x < w - 2; x++) {
+        for (let x = 3; x < w - 3; x++) {
           const idx = (rowOffset + x) * 4;
           const r = data[idx];
           const g = data[idx + 1];
           const b = data[idx + 2];
           const diff = r - Math.max(g, b);
-
-          if (r > 65) {
-            if (diff >= highThresh) {
-              strongMask[rowOffset + x] = 1;
-              weakMask[rowOffset + x] = 1;
-              strongCount++;
-            } else if (diff >= lowThresh) {
-              weakMask[rowOffset + x] = 1;
-            }
-          } else {
-            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-            if (lum < 75 && r < 90 && g < 90 && b < 90) darkCount++;
+          if (diff >= 3.0 || r >= g + 2.0) {
+            mask[rowOffset + x] = 1;
+            validCount++;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
           }
         }
       }
 
-      // Stroke mask (1 for stroke, 0 for background)
-      const mask = new Uint8Array(w * h);
-      let redCount = 0;
-      let minX = w,
-        maxX = -1,
-        minY = h,
-        maxY = -1;
-
-      // Pass 2: BFS flood-fill from strong seeds along weak mask with 8-connectivity
-      if (strongCount >= 10) {
-        const queue = new Int32Array(w * h);
-        let qHead = 0, qTail = 0;
-
-        for (let idx = 0; idx < w * h; idx++) {
-          if (strongMask[idx]) {
-            mask[idx] = 1;
-            redCount++;
-            queue[qTail++] = idx;
-            const cy = Math.floor(idx / w);
-            const cx = idx % w;
-            if (cx < minX) minX = cx;
-            if (cx > maxX) maxX = cx;
-            if (cy < minY) minY = cy;
-            if (cy > maxY) maxY = cy;
-          }
-        }
-
-        while (qHead < qTail) {
-          const curr = queue[qHead++];
-          const cy = Math.floor(curr / w);
-          const cx = curr % w;
-
-          for (let dy = -1; dy <= 1; dy++) {
-            const ny = cy + dy;
-            if (ny < 2 || ny >= h - 2) continue;
-            const nrow = ny * w;
-            for (let dx = -1; dx <= 1; dx++) {
-              if (dx === 0 && dy === 0) continue;
-              const nx = cx + dx;
-              if (nx < 2 || nx >= w - 2) continue;
-              const nidx = nrow + nx;
-              if (weakMask[nidx] && !mask[nidx]) {
-                mask[nidx] = 1;
-                redCount++;
-                queue[qTail++] = nidx;
-                if (nx < minX) minX = nx;
-                if (nx > maxX) maxX = nx;
-                if (ny < minY) minY = ny;
-                if (ny > maxY) maxY = ny;
-              }
-            }
-          }
-        }
-      }
-
-      // If red ink is insufficient, check for dark pen ink (black/blue ink)
-      if (redCount < 20 && darkCount >= 35) {
-        for (let y = 5; y < h - 5; y++) {
-          const rowOffset = y * w;
-          for (let x = 5; x < w - 5; x++) {
-            const idx = (rowOffset + x) * 4;
-            const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (lum < 75 && data[idx] < 90 && data[idx + 1] < 90 && data[idx + 2] < 90) {
-              mask[rowOffset + x] = 1;
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
-            }
-          }
-        }
-      }
-
-      const totalStrokes = redCount >= 20 ? redCount : darkCount;
-
-      if (totalStrokes < 20 || minX > maxX || minY > maxY) {
-        return { isBlank: true, isStrikeout: false, mask, minX, maxX, minY, maxY, w, h };
+      if (validCount < 12 || minX > maxX || minY > maxY) {
+        return { isBlank: true, isStrikeout: false, mask, minX: 0, maxX: 0, minY: 0, maxY: 0, rw: 0, rh: 0, w, h };
       }
 
       const rw = maxX - minX + 1;
       const rh = maxY - minY + 1;
       const ratio = rw / Math.max(1, rh);
-
-      if (rw < 6 || rh < 8) {
-        return { isBlank: true, isStrikeout: false, mask, minX, maxX, minY, maxY, w, h };
-      }
-
-      // Check vertical stroke thickness across columns
-      let maxColSpan = 0;
-      let sumColSpan = 0;
-      let sumX = 0, sumY = 0, sumXX = 0, sumYY = 0, sumXY = 0, ptCount = 0;
-
-      for (let x = minX; x <= maxX; x++) {
-        let span = 0;
-        for (let y = minY; y <= maxY; y++) {
-          if (mask[y * w + x]) {
-            span++;
-            sumX += x;
-            sumY += y;
-            sumXX += x * x;
-            sumYY += y * y;
-            sumXY += x * y;
-            ptCount++;
-          }
-        }
-        if (span > maxColSpan) maxColSpan = span;
-        sumColSpan += span;
-      }
-      const avgColSpan = sumColSpan / Math.max(1, rw);
-
-      // Compute coordinate covariance to measure stroke linearity (detects slashes / cut marks)
-      let corr = 0;
-      if (ptCount >= 8) {
-        const meanX = sumX / ptCount;
-        const meanY = sumY / ptCount;
-        const varX = Math.max(1e-4, (sumXX / ptCount) - meanX * meanX);
-        const varY = Math.max(1e-4, (sumYY / ptCount) - meanY * meanY);
-        const covXY = (sumXY / ptCount) - meanX * meanY;
-        corr = Math.abs(covXY) / Math.sqrt(varX * varY);
-      }
-
-      const strokeDensity = ptCount / Math.max(1, rw * rh);
-
-      // Strikeout / Cut Mark / Dash detection rule:
-      // Evaluators mark unattempted or 0 marks cells with:
-      // 1. Horizontal or slanted dash: wide span (rw >= 14) with thin column profile (maxColSpan <= 9 && avgColSpan <= 5.8)
-      // 2. Short horizontal line: rw >= 10 && rh <= 14
-      // 3. Wide stroke: ratio >= 1.25 && rw >= 15 && rh <= 24
-      // 4. Diagonal cut mark / slash (/ or \): highly linear diagonal stroke (corr >= 0.72, rh <= 30, rw >= 10, density <= 0.35)
-      // Note: Total Marks cell is NEVER a strikeout (always numeric or blank).
       const isTotal = row && (row.id === 'total' || (row.max && row.max > 10.0));
-      const isSingleLineStroke = rw >= 14 && maxColSpan <= 9 && avgColSpan <= 5.8;
-      const isHorizontalDash = (
-        isSingleLineStroke ||
-        (rw >= 10 && rh <= 14) ||
-        (rw >= 14 && avgColSpan <= 7.0 && rh <= 24) ||
-        (rh <= 24 && ratio >= 1.25 && rw >= 15) ||
-        (ratio >= 1.8 && rw >= 14) ||
-        (ratio >= 2.2)
+      const isDash = !isTotal && (
+        (rh <= 16 && (
+          (ratio >= 1.45 && rw >= 12) ||
+          (rh <= 8 && rw >= 10) ||
+          (ratio >= 2.0 && rw >= 14)
+        )) ||
+        (rh <= 5 && rw >= 8) ||
+        (rh <= 6 && validCount <= 25 && ratio >= 1.6)
       );
-      const isDiagonalCutMark = (
-        rh <= 30 && rw >= 10 && corr >= 0.72 && strokeDensity <= 0.35 && ratio >= 0.40 && ratio <= 2.2
-      );
-
-      const isStrikeout = !isTotal && (isHorizontalDash || isDiagonalCutMark);
 
       return {
         isBlank: false,
-        isStrikeout,
+        isStrikeout: isDash,
         mask,
-        minX,
-        maxX,
-        minY,
-        maxY,
-        rw,
-        rh,
-        w,
-        h,
+        minX, maxX, minY, maxY,
+        rw, rh,
+        w, h
       };
     }
 
@@ -1168,7 +1120,7 @@
           let expSum = 0;
           const sProbs = new Float32Array(10);
           for (let i = 0; i < 10; i++) {
-            sProbs[i] = Math.exp(outData[sOff + i] - maxLogit);
+            sProbs[i] = Math.exp((outData[sOff + i] - maxLogit) / 0.25);
             expSum += sProbs[i];
           }
           for (let i = 0; i < 10; i++) {
@@ -1230,129 +1182,53 @@
         const tensorData = this.create28x28Tensor(cellInfo, box);
         const res = await this.classifyDigit(tensorData);
 
-        // Geometric Discriminator for fast messy evaluator handwriting:
-        // 1. Open 3 vs 8, Crossed-7 vs 8, Detached 5 vs 8:
+        // Invariant checks for messy handwriting edge cases
         if (res.digit === '8' && res.probs) {
-          let leftInk = 0;
-          let totInk = 0;
           let botInk = 0;
           let botLeftInk = 0;
           const boxW = box.maxX - box.minX + 1;
           const boxH = box.maxY - box.minY + 1;
-          const splitLeftX = box.minX + Math.round(boxW * 0.40);
           const midX = box.minX + Math.round(boxW * 0.50);
           const botY = box.minY + Math.round(boxH * 0.55);
 
-          for (let cy = box.minY; cy <= box.maxY; cy++) {
-            const rOff = cy * cellInfo.w;
-            for (let cx = box.minX; cx <= box.maxX; cx++) {
-              if (cellInfo.mask[rOff + cx]) {
-                totInk++;
-                if (cx <= splitLeftX) leftInk++;
-                if (cy >= botY) {
-                  botInk++;
-                  if (cx < midX) botLeftInk++;
-                }
-              }
-            }
-          }
-          const leftFrac = leftInk / Math.max(1, totInk);
-          const botLeftFrac = botLeftInk / Math.max(1, botInk);
-
-          // A. Crossed-7 vs 8:
-          // A real 8 has a full bottom loop where left and right have roughly equal ink (botLeftFrac >= 0.25).
-          // A 7 has only a diagonal stem on the right side in the bottom half (botLeftFrac is near 0).
-          if (botLeftFrac < 0.14 && botInk >= 6) {
-            res.digit = '7';
-            res.confidence = Math.max(0.96, res.probs[7]);
-          }
-          // B. Open 3 vs 8:
-          // An 8 has closed left walls on both loops (leftFrac >= 0.42).
-          // An open 3 has an open left perimeter (leftFrac < 0.38) and viable 3 probability.
-          else if ((leftFrac < 0.38 && res.probs[3] >= 0.02) || (leftFrac < 0.45 && res.probs[3] > res.probs[8] * 0.15)) {
-            res.digit = '3';
-            res.confidence = Math.max(0.96, res.probs[3]);
-          }
-          // C. Detached / Cursive 5 vs 8:
-          // A 5 has an open bottom-left belly (botLeftFrac < 0.22) and viable 5 probability.
-          // In contrast, an 8 has a closed bottom loop with botLeftFrac >= 0.28.
-          else if (botLeftFrac < 0.22 && (res.probs[5] >= 0.05 || res.probs[5] > res.probs[8] * 0.15)) {
-            res.digit = '5';
-            res.confidence = Math.max(0.95, res.probs[5]);
-          }
-        }
-
-        // 2. Evaluator 8 vs 6 or Cursive 5 vs 6:
-        if (res.digit === '6' && res.probs) {
-          let tLeft = 0, tRight = 0, bLeft = 0, bRight = 0;
-          const boxW = box.maxX - box.minX + 1;
-          const boxH = box.maxY - box.minY + 1;
-          const midX = box.minX + Math.round(boxW * 0.5);
-          const midY = box.minY + Math.round(boxH * 0.5);
-          for (let cy = box.minY; cy <= box.maxY; cy++) {
-            const rOff = cy * cellInfo.w;
-            for (let cx = box.minX; cx <= box.maxX; cx++) {
-              if (cellInfo.mask[rOff + cx]) {
-                if (cy < midY) {
-                  if (cx < midX) tLeft++; else tRight++;
-                } else {
-                  if (cx < midX) bLeft++; else bRight++;
-                }
-              }
-            }
-          }
-          // Figure-8 with closed loops in both top and bottom quadrants
-          if (tLeft >= 3 && tRight >= 3 && bLeft >= 3 && bRight >= 3 && (res.probs[8] >= 0.02 || res.probs[8] > res.probs[6] * 0.10)) {
-            res.digit = '8';
-            res.confidence = Math.max(0.95, res.probs[8]);
-          } else if (res.probs[5] >= 0.03 || res.probs[5] > res.probs[6] * 0.15) {
-            res.digit = '5';
-            res.confidence = Math.max(0.95, res.probs[5]);
-          }
-        }
-
-        // 3. Evaluator 8 vs 4:
-        if (res.digit === '4' && res.probs) {
-          let bLeft = 0, bRight = 0;
-          const boxW = box.maxX - box.minX + 1;
-          const boxH = box.maxY - box.minY + 1;
-          const midX = box.minX + Math.round(boxW * 0.5);
-          const botY = box.minY + Math.round(boxH * 0.60);
           for (let cy = botY; cy <= box.maxY; cy++) {
             const rOff = cy * cellInfo.w;
             for (let cx = box.minX; cx <= box.maxX; cx++) {
               if (cellInfo.mask[rOff + cx]) {
-                if (cx < midX) bLeft++; else bRight++;
+                botInk++;
+                if (cx < midX) botLeftInk++;
               }
             }
           }
-          if (bLeft >= 4 && bRight >= 4 && (res.probs[8] >= 0.02 || res.probs[8] > res.probs[4] * 0.10)) {
-            res.digit = '8';
-            res.confidence = Math.max(0.95, res.probs[8]);
+          const botLeftFrac = botLeftInk / Math.max(1, botInk);
+
+          // Crossed 7 with horizontal bar (virtually no bottom-left ink)
+          if ((botLeftFrac < 0.12 && botInk >= 4 && res.probs[7] >= 0.05) || (botLeftInk <= 1 && botInk >= 6 && res.probs[7] >= 0.05)) {
+            res.digit = '7';
+            res.confidence = Math.max(0.96, res.probs[7] || 0.96);
           }
         }
 
-        // 3. Evaluator Open-top 4 vs 2:
-        // In an open-top 4, top third has two vertical stems (left vertical stem, right vertical stem).
-        // A 2 has a single rounded arch at the top.
-        if (res.digit === '2' && res.probs && (res.probs[4] >= 0.03 || res.probs[4] > res.probs[2] * 0.15)) {
-          let rightTopInk = 0, leftTopInk = 0;
+        // Open-top 4 vs 2
+        if (res.digit === '2' && res.probs) {
+          let rightTopInk = 0, leftTopInk = 0, centerTopInk = 0;
           const boxW = box.maxX - box.minX + 1;
           const boxH = box.maxY - box.minY + 1;
-          const topH = box.minY + Math.round(boxH * 0.35);
-          const midW = box.minX + Math.round(boxW * 0.5);
+          const topH = box.minY + Math.round(boxH * 0.40);
+          const midW = box.minX + Math.round(boxW * 0.50);
           for (let cy = box.minY; cy <= topH; cy++) {
             const rOff = cy * cellInfo.w;
             for (let cx = box.minX; cx <= box.maxX; cx++) {
               if (cellInfo.mask[rOff + cx]) {
-                if (cx >= midW) rightTopInk++;
-                else leftTopInk++;
+                if (Math.abs(cx - midW) <= 1) centerTopInk++;
+                if (cx > midW) rightTopInk++;
+                else if (cx < midW) leftTopInk++;
               }
             }
           }
-          if (rightTopInk >= 5 && leftTopInk >= 4) {
+          if (rightTopInk >= 3 && leftTopInk >= 3 && centerTopInk <= 1 && (res.probs[4] >= 0.05 || res.probs[4] > res.probs[2] * 0.10)) {
             res.digit = '4';
-            res.confidence = Math.max(0.95, res.probs[4]);
+            res.confidence = Math.max(0.95, res.probs[4] || 0.95);
           }
         }
 
@@ -1578,13 +1454,13 @@
         let detectedTotal = null;
 
         for (const row of activeRows) {
-          const padTop = 4;
-          const padBottom = row.id === 'total' ? 5 : 4;
+          const padTop = 1;
+          const padBottom = 1;
           const cellCanvas = this.cropCanvas(
             rectified,
-            marksX[0] + 4,
+            marksX[0] + 2,
             row.y1 + padTop,
-            Math.max(10, marksX[1] - marksX[0] - 8),
+            Math.max(10, marksX[1] - marksX[0] - 4),
             Math.max(10, row.y2 - row.y1 - (padTop + padBottom))
           );
 
@@ -1608,6 +1484,28 @@
             is_blank: markRes.isBlank,
             crop_base64: cellB64,
           });
+        }
+
+        // Reconcile if single low-confidence mark caused discrepancy with detected_total
+        if (detectedTotal !== null && detectedTotal > 0 && Math.abs(calcSum - detectedTotal) > 0.01) {
+          const lowConfMarks = marksList.filter(
+            (m) => m.id !== 'total' && !m.is_blank && m.confidence < 0.65
+          );
+          if (lowConfMarks.length === 1) {
+            const targetM = lowConfMarks[0];
+            const diff = detectedTotal - (calcSum - targetM.verified_val);
+            if (diff >= 0 && diff <= 10) {
+              targetM.detected_str = String(diff);
+              targetM.numeric_val = diff;
+              targetM.verified_val = diff;
+              targetM.confidence = 0.85;
+              targetM.status = 'Valid';
+              calcSum = marksList.reduce(
+                (acc, m) => (m.id !== 'total' && !m.is_blank ? acc + (m.verified_val || 0) : acc),
+                0
+              );
+            }
+          }
         }
 
         resultsByIA[iaName] = marksList;

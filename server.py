@@ -109,6 +109,9 @@ if WEB_DIR.exists():
 if (BASE_DIR / "models").exists():
     app.mount("/models", StaticFiles(directory=str(BASE_DIR / "models")), name="models")
 
+if SAMPLE_DIR.exists():
+    app.mount("/sample_data", StaticFiles(directory=str(SAMPLE_DIR)), name="sample_data")
+
 
 @app.get("/health")
 async def health_check():

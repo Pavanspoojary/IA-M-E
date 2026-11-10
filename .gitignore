@@ -55,3 +55,4 @@ total_24_*.png
 data/
 training_data/
 models/mnist_data/
+sample_data/harvested_crops/

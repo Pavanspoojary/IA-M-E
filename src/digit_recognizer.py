@@ -236,17 +236,17 @@ class DigitRecognizer:
 
         avg_confidence = float(np.mean(confidences)) if confidences else 0.0
 
-        # Over-segmented single digit fallback (only if total bounding box is narrow like a single digit: aspect < 0.95)
+        # Over-segmented single digit fallback (question cells with max_marks <= 10.0 cannot exceed max_marks)
         if numeric_val is not None and numeric_val > max_marks and len(char_tokens) > 1 and max_marks <= 10.0:
-            pts_all = cv2.findNonZero(thresh_inv)
-            if pts_all is not None:
-                ax, ay, aw, ah = cv2.boundingRect(pts_all)
-                if aw / float(max(1, ah)) < 0.95:
+            if value_str != "10":
+                pts_all = cv2.findNonZero(thresh_inv)
+                if pts_all is not None:
+                    ax, ay, aw, ah = cv2.boundingRect(pts_all)
                     full_crop = thresh_inv[ay : ay + ah, ax : ax + aw]
                     s_digit, s_score, s_margin, s_ambig, s_note = self._classify_char_crop(full_crop, aw, ah)
                     try:
                         s_num = float(s_digit)
-                        if s_num <= max_marks:
+                        if s_num <= max_marks and s_score >= 0.50:
                             value_str = s_digit
                             numeric_val = s_num
                             avg_confidence = s_score
@@ -290,9 +290,9 @@ class DigitRecognizer:
         h, w = thresh_inv.shape[:2]
         contours, hierarchy = cv2.findContours(thresh_inv, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        min_area = 15
-        min_h = max(6, int(h * 0.15))
-        min_w = 3
+        min_area = 8
+        min_h = max(4, int(h * 0.08))
+        min_w = 2
 
         raw_boxes = []
         has_dot = False
@@ -432,13 +432,11 @@ class DigitRecognizer:
             outputs = self.session.run([self.output_name], {self.input_name: tensor})
             raw_out = outputs[0][0]  # Shape: (10,)
 
-            # Check if model outputs raw logits or normalized softmax probabilities
-            if np.any(raw_out < 0.0) or abs(float(np.sum(raw_out)) - 1.0) > 0.05:
-                shift = raw_out - np.max(raw_out)
-                exp_vals = np.exp(shift)
-                probs = exp_vals / np.sum(exp_vals)
-            else:
-                probs = raw_out
+            # Apply temperature scaling to logits before softmax
+            temp = 0.25
+            shift = (raw_out - np.max(raw_out)) / temp
+            exp_vals = np.exp(shift)
+            probs = exp_vals / np.sum(exp_vals)
 
             ranked = np.argsort(probs)[::-1]
             best_idx = ranked[0]
@@ -449,32 +447,27 @@ class DigitRecognizer:
             best_score = float(probs[best_idx])
             second_score = float(probs[second_idx])
 
-            # Geometric invariant fallback:
-            # 1. Open 3 vs 8 / Crossed-7 vs 8
+            # Invariant checks for messy handwriting edge cases
             if best_digit == "8":
-                tot_ink = float(np.sum(char_crop > 0))
-                left_split = int(orig_w * 0.35)
-                left_ink = float(np.sum(char_crop[:, :max(1, left_split)] > 0))
-                left_frac = left_ink / max(1.0, tot_ink)
-                if (left_frac < 0.44 and probs[3] >= 0.03) or (probs[3] > probs[8] * 0.15):
-                    best_digit = "3"
-                    best_score = max(0.95, float(probs[3]))
-                elif probs[7] >= 0.03 or probs[7] > probs[8] * 0.15:
+                bot_y = int(orig_h * 0.55)
+                mid_x = int(orig_w * 0.50)
+                bot_ink = float(np.sum(char_crop[bot_y:, :] > 0))
+                bot_left_ink = float(np.sum(char_crop[bot_y:, :mid_x] > 0))
+                bot_left_frac = bot_left_ink / max(1.0, bot_ink)
+
+                # Crossed 7 with horizontal bar (virtually no bottom-left ink)
+                if (bot_left_frac < 0.12 and bot_ink >= 4 and probs[7] >= 0.05) or (bot_left_ink <= 1 and bot_ink >= 6 and probs[7] >= 0.05):
                     best_digit = "7"
-                    best_score = max(0.95, float(probs[7]))
-                elif probs[5] >= 0.03 or probs[5] > probs[8] * 0.15:
-                    best_digit = "5"
-                    best_score = max(0.95, float(probs[5]))
+                    best_score = max(0.96, float(probs[7]))
 
-            # 2. Cursive 5 vs 6
-            elif best_digit == "6":
-                if probs[5] >= 0.04 or probs[5] > probs[6] * 0.18:
-                    best_digit = "5"
-                    best_score = max(0.95, float(probs[5]))
-
-            # 3. Open-top 4 vs 2
             elif best_digit == "2":
-                if probs[4] >= 0.04 or probs[4] > probs[2] * 0.18:
+                top_h = int(orig_h * 0.40)
+                mid_x = orig_w // 2
+                l_top = float(np.sum(char_crop[:top_h, :mid_x] > 0))
+                r_top = float(np.sum(char_crop[:top_h, mid_x:] > 0))
+                center_top = float(np.sum(char_crop[:top_h, max(0, mid_x - 1) : min(orig_w, mid_x + 2)] > 0))
+                # Open-top 4 with two vertical stems at the top
+                if l_top >= 3 and r_top >= 3 and center_top <= 1 and (probs[4] >= 0.05 or probs[4] > probs[2] * 0.10):
                     best_digit = "4"
                     best_score = max(0.95, float(probs[4]))
 

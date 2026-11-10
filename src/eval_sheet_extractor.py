@@ -145,6 +145,113 @@ class EvalSheetExtractor:
 
         return None
 
+    def _get_snapped_grid(self, warped_table: np.ndarray) -> Tuple[List[int], Dict[str, Tuple[int, int]]]:
+        """Dynamically detect and snap horizontal rows and vertical columns to exact grid lines."""
+        gray = cv2.cvtColor(warped_table, cv2.COLOR_BGR2GRAY)
+        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 5)
+
+        # 1. Snap horizontal rows (13 rows total: 1a..4c and Total Marks)
+        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (30, 1))
+        h_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, h_kernel)
+        h_proj = np.sum(h_lines[:, 50:150], axis=1) / 255.0
+
+        y_start = 80 + int(np.argmax(h_proj[80:110]))
+        y_end = 690 + int(np.argmax(h_proj[690:725]))
+        avg_h = (y_end - y_start) / 13.0
+
+        rows = [y_start]
+        for k in range(1, 13):
+            exp_y = int(round(y_start + k * avg_h))
+            w_low = max(0, exp_y - 10)
+            w_high = min(warped_table.shape[0], exp_y + 11)
+            sub = h_proj[w_low:w_high]
+            rows.append(w_low + int(np.argmax(sub)) if len(sub) > 0 and np.max(sub) > 20 else exp_y)
+        rows.append(y_end)
+
+        # 2. Snap vertical columns (7 vertical lines: 3 IA sections x [Q.No, Marks])
+        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 30))
+        v_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, v_kernel)
+        v_proj = np.sum(v_lines[150:650, :], axis=0) / 255.0
+
+        expected_v = [0, 95, 199, 295, 399, 495, 599]
+        v_snapped = []
+        for exp_x in expected_v:
+            w_low = max(0, exp_x - 12)
+            w_high = min(warped_table.shape[1], exp_x + 13)
+            sub = v_proj[w_low:w_high]
+            v_snapped.append(w_low + int(np.argmax(sub)) if len(sub) > 0 and np.max(sub) > 50 else exp_x)
+
+        cols = {
+            "IA 1": (v_snapped[1], v_snapped[2]),
+            "IA 2": (v_snapped[3], v_snapped[4]),
+            "IA 3": (v_snapped[5], v_snapped[6]),
+        }
+        return rows, cols
+
+    def _clean_cell_ink(self, cell_bgr: np.ndarray) -> np.ndarray:
+        """Extract clean handwritten ink from cell, eliminating border lines and paper background noise."""
+        h, w = cell_bgr.shape[:2]
+        inner = cell_bgr[2:h-2, 3:w-3]
+        if inner.size == 0:
+            return np.zeros((h, w), dtype=np.uint8)
+        ih, iw = inner.shape[:2]
+
+        # Color ink check: evaluator writes in red pen, or strong dark ink
+        b = inner[:, :, 0].astype(float)
+        g = inner[:, :, 1].astype(float)
+        r = inner[:, :, 2].astype(float)
+        diff = r - np.maximum(g, b)
+        is_red = (diff >= 3.0) | (r >= g + 2.0)
+
+        # If cell has virtually no red ink, check if there is central dark ink (blue/black pen)
+        if np.count_nonzero(is_red) < 10:
+            gray_inner = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
+            center_gray = gray_inner[int(ih * 0.15):int(ih * 0.85), int(iw * 0.15):int(iw * 0.85)]
+            if center_gray.size == 0 or np.count_nonzero(center_gray < 110) < 12:
+                return np.zeros((h, w), dtype=np.uint8)
+
+        gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        th = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 8)
+
+        # Keep pixels that match red ink or dark strokes
+        if np.count_nonzero(is_red) >= 10:
+            stroke = th & (is_red.astype(np.uint8) * 255)
+        else:
+            stroke = th.copy()
+
+        # Eliminate border lines and artifacts via connected components
+        num_l, labels, stats, _ = cv2.connectedComponentsWithStats(stroke)
+        for l in range(1, num_l):
+            cw = stats[l, cv2.CC_STAT_WIDTH]
+            ch = stats[l, cv2.CC_STAT_HEIGHT]
+            cx = stats[l, cv2.CC_STAT_LEFT]
+            cy = stats[l, cv2.CC_STAT_TOP]
+            area = stats[l, cv2.CC_STAT_AREA]
+
+            # Edge shavings touching border
+            is_edge_shaving = (
+                ((cy <= 4 or (cy + ch) >= ih - 4) and ch <= 4 and area <= 30) or
+                ((cx <= 4 or (cx + cw) >= iw - 4) and cw <= 5 and area <= 30) or
+                (cy <= 2 and ch <= 2) or
+                ((cy + ch) >= ih - 2 and ch <= 2) or
+                (cx <= 2 and cw <= 2) or
+                ((cx + cw) >= iw - 2 and cw <= 2)
+            )
+            # Horizontal border touching top or bottom
+            is_h_border = (cy <= 3 or (cy + ch) >= ih - 3) and (ch <= 6 and (cw >= 25 or cw / max(1, ch) >= 3.0))
+            # Vertical border touching left or right
+            is_v_border = (cx <= 2 or (cx + cw) >= iw - 2) and (ch >= 20 and ch / max(1, cw) >= 2.5)
+            # Tiny specks
+            is_speck = area < 8
+
+            if is_edge_shaving or is_h_border or is_v_border or is_speck:
+                stroke[labels == l] = 0
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[2:h-2, 3:w-3] = stroke
+        return mask
+
     def _extract_distribution_of_marks(
         self,
         warped_table: np.ndarray,
@@ -161,48 +268,20 @@ class EvalSheetExtractor:
 
         results_by_ia: Dict[str, List[Dict[str, Any]]] = {}
         kernel_2x2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        snapped_rows, snapped_cols = self._get_snapped_grid(warped_table)
 
         for ia_name in selected_ias:
-            x1, x2 = self.DOM_COLUMNS[ia_name]["marks_x"]
+            x1, x2 = snapped_cols.get(ia_name, self.DOM_COLUMNS[ia_name]["marks_x"])
             ia_marks: List[Dict[str, Any]] = []
 
-            for q_id, q_lbl, y1, y2 in self.DOM_ROWS:
-                cell = warped_table[y1 + 5 : y2 - 5, x1 + 6 : x2 - 6]
-
-                # 1. Red ink isolation (eliminates black printed borders)
-                b, g, red = cv2.split(cell)
-                diff = red.astype(int) - np.maximum(b, g).astype(int)
-                red_mask = (diff >= 9).astype(np.uint8) * 255
-                red_mask[:2, :] = 0; red_mask[-2:, :] = 0; red_mask[:, :2] = 0; red_mask[:, -2:] = 0
-                red_cnt = cv2.countNonZero(red_mask)
-
-                # 2. Dark ink fallback with border shave
-                cgray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
-                shaved_gray = cgray[4:-4, 4:-4]
-                _, dark_thresh = cv2.threshold(shaved_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                dark_cnt = cv2.countNonZero(dark_thresh)
-
-                if red_cnt >= 20:
-                    bw = red_mask
-                elif dark_cnt >= 25 and shaved_gray.std() > 6.0:
-                    bw = np.zeros_like(cgray)
-                    bw[4:-4, 4:-4] = dark_thresh
-                else:
-                    ia_marks.append({
-                        "id": q_id,
-                        "label": q_lbl,
-                        "detected_str": "-",
-                        "numeric_val": 0.0,
-                        "verified_val": 0.0,
-                        "confidence": 1.0,
-                        "status": "Blank",
-                        "is_blank": True,
-                        "crop_base64": self._encode_base64(cell),
-                    })
-                    continue
-
+            for r_idx, (q_id, q_lbl, _, _) in enumerate(self.DOM_ROWS):
+                y1 = snapped_rows[r_idx]
+                y2 = snapped_rows[r_idx + 1]
+                cell = warped_table[y1 + 1 : y2 - 1, x1 + 2 : x2 - 2]
+                bw = self._clean_cell_ink(cell)
                 pts = cv2.findNonZero(bw)
-                if pts is None or cv2.countNonZero(bw) < 18:
+
+                if pts is None or cv2.countNonZero(bw) < 12:
                     ia_marks.append({
                         "id": q_id,
                         "label": q_lbl,
@@ -218,22 +297,32 @@ class EvalSheetExtractor:
 
                 rx, ry, rw, rh = cv2.boundingRect(pts)
                 ratio = rw / float(max(1, rh))
-                # Unattempted strikeout dash detection
-                if (ratio >= 2.5) or (rh <= 12 and rw >= 18) or (rw > cell.shape[1] * 0.35 and rh <= 14):
-                    ia_marks.append({
-                        "id": q_id,
-                        "label": q_lbl,
-                        "detected_str": "-",
-                        "numeric_val": 0.0,
-                        "verified_val": 0.0,
-                        "confidence": 0.95,
-                        "status": "Valid",
-                        "is_blank": False,
-                        "crop_base64": self._encode_base64(cell),
-                    })
-                    continue
+
+                # Unattempted strikeout dash detection (only for non-total cells)
+                if q_id != "total":
+                    count_nz = cv2.countNonZero(bw)
+                    is_dash = (
+                        (rw >= 40 and ratio >= 3.5) or
+                        (rw >= 20 and ratio >= 3.5 and rh <= 15) or
+                        (rh <= 5 and rw >= 8 and ratio >= 2.0) or
+                        (rh <= 6 and count_nz <= 30 and ratio >= 2.0)
+                    )
+                    if is_dash:
+                        ia_marks.append({
+                            "id": q_id,
+                            "label": q_lbl,
+                            "detected_str": "-",
+                            "numeric_val": 0.0,
+                            "verified_val": 0.0,
+                            "confidence": 0.95,
+                            "status": "Valid",
+                            "is_blank": False,
+                            "crop_base64": self._encode_base64(cell),
+                        })
+                        continue
 
                 max_m = 50.0 if q_id == "total" else 10.0
+
                 bw_input = cv2.dilate(bw, kernel_2x2) if q_id != "total" else bw
                 res = self.recognizer.recognize_region(bw_input, max_marks=max_m, allow_decimal=False)
 
@@ -268,6 +357,23 @@ class EvalSheetExtractor:
             )
             detected_tot_mark = next((m for m in marks if m["id"] == "total"), None)
             detected_val = detected_tot_mark["numeric_val"] if detected_tot_mark else None
+
+            # Reconcile if single low-confidence mark caused discrepancy with detected_total
+            if detected_val is not None and detected_val > 0 and abs(calc_sum - detected_val) > 0.01:
+                low_conf_marks = [m for m in marks if m["id"] != "total" and not m["is_blank"] and m["confidence"] < 0.65]
+                if len(low_conf_marks) == 1:
+                    target_m = low_conf_marks[0]
+                    diff = detected_val - (calc_sum - target_m["verified_val"])
+                    if 0.0 <= diff <= 10.0:
+                        target_m["detected_str"] = str(int(diff)) if diff.is_integer() else f"{diff:.1f}"
+                        target_m["numeric_val"] = diff
+                        target_m["verified_val"] = diff
+                        target_m["confidence"] = 0.85
+                        target_m["status"] = "Valid"
+                        calc_sum = sum(
+                            m["verified_val"] for m in marks
+                            if m["id"] != "total" and m["verified_val"] is not None and not m["is_blank"]
+                        )
 
             summary_totals[ia_name] = {
                 "calculated_sum": round(calc_sum, 1),
@@ -622,6 +728,23 @@ class EvalSheetExtractor:
             )
             detected_tot_mark = next((m for m in marks if m["id"] == "total"), None)
             detected_val = detected_tot_mark["numeric_val"] if detected_tot_mark else None
+
+            # Reconcile if single low-confidence mark caused discrepancy with detected_total
+            if detected_val is not None and detected_val > 0 and abs(calc_sum - detected_val) > 0.01:
+                low_conf_marks = [m for m in marks if m["id"] != "total" and not m["is_blank"] and m["confidence"] < 0.65]
+                if len(low_conf_marks) == 1:
+                    target_m = low_conf_marks[0]
+                    diff = detected_val - (calc_sum - target_m["verified_val"])
+                    if 0.0 <= diff <= 10.0:
+                        target_m["detected_str"] = str(int(diff)) if diff.is_integer() else f"{diff:.1f}"
+                        target_m["numeric_val"] = diff
+                        target_m["verified_val"] = diff
+                        target_m["confidence"] = 0.85
+                        target_m["status"] = "Valid"
+                        calc_sum = sum(
+                            m["verified_val"] for m in marks
+                            if m["id"] != "total" and m["verified_val"] is not None and not m["is_blank"]
+                        )
 
             summary_totals[ia_name] = {
                 "calculated_sum": round(calc_sum, 1),
