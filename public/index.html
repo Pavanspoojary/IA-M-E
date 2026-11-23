@@ -15,7 +15,7 @@
         <p>Continuous Internal Assessment evaluation sheet digitization and export engine</p>
       </div>
       <div class="header-badges">
-        <span class="engine-badge" id="engineStatusBadge">In-Browser Engine (WASM)</span>
+        <button type="button" class="pdf-mode-toggle" id="pdfModeToggle" aria-pressed="false">PDF Mode: Off</button>
       </div>
     </header>
 
@@ -36,6 +36,19 @@
         <!-- Hidden Native File Inputs -->
         <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display: none;">
         <input type="file" id="fileInput" accept="image/*,.pdf" style="display: none;">
+      </div>
+
+      <div class="pdf-mode-settings" id="pdfModeSettings" style="display: none;">
+        <h3>PDF sequence settings</h3>
+        <p>Assign USNs to PDF pages in order. Listed USNs are skipped before assigning the next page.</p>
+        <div class="pdf-mode-fields">
+          <label for="startingUsn">Starting USN
+            <input type="text" id="startingUsn" placeholder="4MW24AD001" autocomplete="off">
+          </label>
+          <label for="skipUsns">Skip USNs (comma separated, optional)
+            <input type="text" id="skipUsns" placeholder="4MW24AD004, 4MW24AD009" autocomplete="off">
+          </label>
+        </div>
       </div>
 
       <!-- File Loaded Notification Banner -->

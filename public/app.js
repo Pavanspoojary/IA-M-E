@@ -12,18 +12,11 @@
   let selectedIA = 'IA 1';
   let currentExtractionData = null;
   let currentSheetIndex = 0;
+  let pdfMode = false;
 
   // Initialize In-Browser Extraction Engine
   const browserEngine = typeof BrowserExtractionEngine !== 'undefined' ? new BrowserExtractionEngine() : null;
-  if (browserEngine) {
-    browserEngine.init().then((ready) => {
-      const badge = document.getElementById('engineStatusBadge');
-      if (badge) {
-        badge.textContent = ready ? 'In-Browser Engine (Active)' : 'Server Mode';
-        if (!ready) badge.classList.add('offline');
-      }
-    });
-  }
+  if (browserEngine) browserEngine.init();
 
   // DOM Elements
   const dropzone = document.getElementById('dropzone');
@@ -31,10 +24,22 @@
   const fileInput = document.getElementById('fileInput');
   const btnCamera = document.getElementById('btnCamera');
   const btnBrowse = document.getElementById('btnBrowse');
+  const pdfModeToggle = document.getElementById('pdfModeToggle');
+  const pdfModeSettings = document.getElementById('pdfModeSettings');
+  const startingUsnInput = document.getElementById('startingUsn');
+  const skipUsnsInput = document.getElementById('skipUsns');
 
   const fileBanner = document.getElementById('fileBanner');
   const fileBannerText = document.getElementById('fileBannerText');
   const btnChangeFile = document.getElementById('btnChangeFile');
+
+  pdfModeToggle.addEventListener('click', () => {
+    pdfMode = !pdfMode;
+    pdfModeToggle.textContent = `PDF Mode: ${pdfMode ? 'On' : 'Off'}`;
+    pdfModeToggle.setAttribute('aria-pressed', String(pdfMode));
+    pdfModeToggle.classList.toggle('active', pdfMode);
+    pdfModeSettings.style.display = pdfMode ? 'block' : 'none';
+  });
 
   const iaSelectCard = document.getElementById('iaSelectCard');
   const iaButtons = document.querySelectorAll('.ia-btn');
@@ -155,6 +160,22 @@
 
   // Fetch Marks and Crop Column
   btnFetchMarks.addEventListener('click', async () => {
+    const isPdf = selectedFile && (selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf'));
+    if (pdfMode && !isPdf) {
+      alert('PDF Mode requires a PDF document. Please upload a PDF or turn PDF Mode off.');
+      return;
+    }
+    let startingUsn = '';
+    let skippedUsns = new Set();
+    if (pdfMode) {
+      startingUsn = startingUsnInput.value.trim().toUpperCase();
+      if (!/^.*\d+$/.test(startingUsn)) {
+        alert('Enter a starting USN that ends in digits, for example 4MW24AD001.');
+        startingUsnInput.focus();
+        return;
+      }
+      skippedUsns = new Set(skipUsnsInput.value.split(',').map((usn) => usn.trim().toUpperCase()).filter(Boolean));
+    }
     const formData = new FormData();
     formData.append('target_ia', selectedIA);
 
@@ -198,6 +219,36 @@
         }
 
         data = await resp.json();
+      }
+
+      if (pdfMode) {
+        const match = startingUsn.match(/^(.*?)(\d+)$/);
+        const prefix = match[1];
+        const width = match[2].length;
+        let sequence = Number(match[2]);
+        if (!data.sheets || !data.sheets.length) {
+          data.sheets = [{
+            sheet_index: 1,
+            page_number: 1,
+            target_ia: data.target_ia || selectedIA,
+            selected_ias: data.selected_ias || [data.target_ia || selectedIA],
+            results_by_ia: data.results_by_ia || {},
+            summary_totals: data.summary_totals || {},
+            column_crop_base64: data.column_crop_base64,
+          }];
+        }
+        data.sheets.sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0));
+        data.sheets.forEach((sheet, index) => {
+          let usn = `${prefix}${String(sequence).padStart(width, '0')}`;
+          while (skippedUsns.has(usn.toUpperCase())) {
+            sequence += 1;
+            usn = `${prefix}${String(sequence).padStart(width, '0')}`;
+          }
+          sheet.usn = usn;
+          sheet.sheet_label = `${usn} (Page ${sheet.page_number || index + 1})`;
+          sequence += 1;
+        });
+        data.pdf_mode = true;
       }
 
       currentExtractionData = data;
@@ -373,6 +424,7 @@
       cropColumnTitle.textContent = totalSheets > 1
         ? `Cropped Column (${targetLabel}) - Sheet ${currentSheetIndex + 1}`
         : `Cropped Column (${targetLabel})`;
+      if (sheet.usn) cropColumnTitle.textContent = `Cropped Column (${targetLabel}) - ${sheet.usn}`;
     }
 
     // 2. Table Rows
@@ -656,6 +708,7 @@
           sheet_index: s.sheet_index,
           page_number: s.page_number,
           sheet_label: s.sheet_label,
+          usn: s.usn,
           target_ia: s.target_ia,
           selected_ias: s.selected_ias,
           results_by_ia: cleanResults,
@@ -665,6 +718,7 @@
 
       const exportPayload = {
         total_sheets: currentExtractionData.total_sheets || cleanSheets.length,
+        pdf_mode: Boolean(currentExtractionData.pdf_mode),
         sheets: cleanSheets,
         results_by_ia: cleanSheets.length > 0 ? cleanSheets[0].results_by_ia : {},
       };

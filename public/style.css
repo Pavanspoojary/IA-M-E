@@ -92,6 +92,69 @@ header {
   white-space: nowrap;
 }
 
+.pdf-mode-toggle {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.pdf-mode-toggle.active {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-color: var(--success-border);
+}
+
+.pdf-mode-settings {
+  margin: 0 0 18px;
+  padding: 16px;
+  border: 1px solid var(--info-border);
+  border-radius: 8px;
+  background: #f7fbff;
+}
+
+.pdf-mode-settings h3 {
+  margin-bottom: 4px;
+  color: var(--primary);
+  font-size: 0.95rem;
+}
+
+.pdf-mode-settings p {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 12px;
+}
+
+.pdf-mode-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pdf-mode-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-main);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.pdf-mode-fields input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 400;
+}
+
+@media (max-width: 600px) {
+  .pdf-mode-fields { grid-template-columns: 1fr; }
+}
+
 .model-pill.offline {
   background: var(--warning-bg);
   color: var(--warning-text);

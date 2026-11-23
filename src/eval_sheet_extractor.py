@@ -889,7 +889,8 @@ class EvalSheetExtractor:
         q_cols = self._get_question_columns(sheets)
 
         # Sheet 1: Marks Summary Matrix (Minimal, starts directly on Row 1)
-        headers = ["Sheet", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
+        pdf_mode = bool(extraction_data.get("pdf_mode"))
+        headers = (["USN", "Assessment"] if pdf_mode else ["Sheet", "Assessment"]) + [lbl for _, lbl in q_cols] + ["Total", "Status"]
         col_widths = [18, 14] + [8] * len(q_cols) + [10, 14]
 
         ws.append(headers)
@@ -963,7 +964,8 @@ class EvalSheetExtractor:
                 else:
                     row_status = "Valid"
 
-                row_vals = [sheet_label, ia_name] + q_vals + [final_total, row_status]
+                row_identifier = sheet.get("usn", sheet_label) if pdf_mode else sheet_label
+                row_vals = [row_identifier, ia_name] + q_vals + [final_total, row_status]
                 ws.append(row_vals)
                 ws.row_dimensions[current_row].height = 20
 
@@ -1137,7 +1139,8 @@ class EvalSheetExtractor:
 
         q_cols = self._get_question_columns(sheets)
 
-        headers = ["Sheet", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
+        pdf_mode = bool(extraction_data.get("pdf_mode"))
+        headers = (["USN", "Assessment"] if pdf_mode else ["Sheet", "Assessment"]) + [lbl for _, lbl in q_cols] + ["Total", "Status"]
         writer.writerow(headers)
 
         canonical_order = ["IA 1", "IA 2", "IA 3"]
@@ -1207,7 +1210,8 @@ class EvalSheetExtractor:
                 else:
                     row_status = "Valid"
 
-                writer.writerow([sheet_label, ia_name] + q_vals + [final_total, row_status])
+                row_identifier = sheet.get("usn", sheet_label) if pdf_mode else sheet_label
+                writer.writerow([row_identifier, ia_name] + q_vals + [final_total, row_status])
 
         return out.getvalue()
 

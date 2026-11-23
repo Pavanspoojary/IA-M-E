@@ -1835,7 +1835,9 @@
         return s;
       };
 
-      const headerCols = ['Sheet', 'Assessment', ...qColumns.map(q => q.label), 'Total', 'Status'];
+      const headerCols = extractionData.pdf_mode
+        ? ['USN', 'Assessment', ...qColumns.map(q => q.label), 'Total', 'Status']
+        : ['Sheet', 'Assessment', ...qColumns.map(q => q.label), 'Total', 'Status'];
       const lines = [headerCols.map(toCsvField).join(',')];
 
       const sortedSheets = [...sheets].sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0));
@@ -1862,7 +1864,7 @@
             if (m.label) markMap[normKey(m.label)] = m;
           });
 
-          const rowVals = [sLabel, ia];
+          const rowVals = [extractionData.pdf_mode ? (s.usn || sLabel) : sLabel, ia];
           let allBlank = true;
 
           qColumns.forEach((col) => {
@@ -1961,7 +1963,9 @@
       const canonicalOrder = ['IA 1', 'IA 2', 'IA 3'];
 
       // Row 1: Clean Minimal Table Headers
-      const headerRow = ['Sheet', 'Assessment', ...qColumns.map(q => q.label), 'Total', 'Status'];
+      const headerRow = extractionData.pdf_mode
+        ? ['USN', 'Assessment', ...qColumns.map(q => q.label), 'Total', 'Status']
+        : ['Sheet', 'Assessment', ...qColumns.map(q => q.label), 'Total', 'Status'];
       const dataRows = [headerRow];
 
       sortedSheets.forEach((s) => {
@@ -1985,7 +1989,7 @@
             if (m.label) markMap[normKey(m.label)] = m;
           });
 
-          const row = [sLabel, ia];
+          const row = [extractionData.pdf_mode ? (s.usn || sLabel) : sLabel, ia];
           let allBlank = true;
 
           qColumns.forEach((col) => {
