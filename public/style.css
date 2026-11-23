@@ -73,10 +73,8 @@ header {
   width: 78px;
   height: 75px;
   flex: 0 0 auto;
-  padding: 4px;
-  border-radius: 7px;
-  background: var(--primary);
   object-fit: contain;
+  filter: brightness(0);
 }
 
 .model-pill {
