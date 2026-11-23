@@ -1308,13 +1308,13 @@
           // Open left side indicates a 3 or crossed 7 (an 8 MUST have closed loops on left)
           if (leftFrac < 0.18 && midLeftInk === 0 && botRightInk >= 4 && (res.probs[3] >= 0.04 || res.probs[3] >= res.probs[8] * 0.15)) {
             res.digit = '3';
-            res.confidence = Math.max(0.92, res.probs[3] > 0.05 ? res.probs[3] : 0.90);
+            res.confidence = res.probs[3];
           } else if ((botLeftFrac < 0.18 && botInk >= 4) || (botLeftInk <= 1 && botInk >= 6)) {
             res.digit = '7';
-            res.confidence = Math.max(0.95, res.probs[7] > 0.05 ? res.probs[7] : 0.92);
+            res.confidence = res.probs[7];
           } else if (topRightInk >= 3 && midRightInk <= 2 && res.probs[5] >= 0.005) {
             res.digit = '5';
-            res.confidence = Math.max(0.92, res.probs[5] > 0.05 ? res.probs[5] : 0.90);
+            res.confidence = res.probs[5];
           }
         } else if (res.digit === '3' && res.probs) {
           // Closed loops on left indicate an 8 misclassified as 3:
@@ -1322,42 +1322,42 @@
           // or a low-confidence ambiguous prediction where 8 is a close runner-up and middle-left has ink
           if (midLeftInk >= 2 && (res.probs[8] >= 0.10 || res.confidence < 0.60)) {
             res.digit = '8';
-            res.confidence = Math.max(0.92, res.probs[8] > 0.05 ? res.probs[8] : 0.88);
+            res.confidence = res.probs[8];
           } else if (res.confidence < 0.55 && res.probs[8] >= 0.25 && leftFrac >= 0.24 && topLeftInk >= 3 && botLeftInk >= 3 && midLeftInk >= 1) {
             res.digit = '8';
-            res.confidence = Math.max(0.92, res.probs[8] > 0.05 ? res.probs[8] : 0.88);
+            res.confidence = res.probs[8];
           }
         } else if (res.digit === '6' && res.probs) {
           // Top horizontal bar indicates a 5 (a 6 has a curved ascender curving left, empty top-right)
           if (topRightInk >= 3 && res.probs[5] >= 0.005) {
             res.digit = '5';
-            res.confidence = Math.max(0.92, res.probs[5] > 0.05 ? res.probs[5] : 0.90);
+            res.confidence = res.probs[5];
           }
         } else if (res.digit === '2' && res.probs) {
           // A 2 MUST have a wide horizontal baseline at the bottom.
           // If bottom is narrow vertical stem AND middle has wide crossbar, it is a 4!
           if (botBaseSpanRatio < 0.35 && midCrossSpanRatio >= 0.45 && (res.probs[4] >= 0.02 || res.probs[4] > res.probs[2] * 0.05)) {
             res.digit = '4';
-            res.confidence = Math.max(0.92, res.probs[4] > 0.05 ? res.probs[4] : 0.88);
+            res.confidence = res.probs[4];
           } else if (botBaseSpanRatio < 0.30 && topRightInk >= 3 && (res.probs[7] >= 0.04 || res.probs[7] > res.probs[2] * 0.10)) {
             res.digit = '7';
-            res.confidence = Math.max(0.92, res.probs[7] > 0.05 ? res.probs[7] : 0.88);
+            res.confidence = res.probs[7];
           } else if (lTop >= 3 && rTop >= 3 && cTop <= 1 && botBaseSpanRatio < 0.40 && (res.probs[4] >= 0.01 || res.probs[4] > res.probs[2] * 0.10)) {
             res.digit = '4';
-            res.confidence = Math.max(0.95, res.probs[4] > 0.05 ? res.probs[4] : 0.92);
+            res.confidence = res.probs[4];
           }
         } else if (res.digit === '4' && res.probs) {
           // A 4 has vertical stem at bottom, NEVER a wide horizontal baseline across the bottom.
           // If bottom has a wide horizontal base stroke, it is a 2!
           if (botBaseSpanRatio >= 0.45 && botLeftInk >= 2 && (res.probs[2] >= 0.02 || res.probs[2] > res.probs[4] * 0.05)) {
             res.digit = '2';
-            res.confidence = Math.max(0.92, res.probs[2] > 0.05 ? res.probs[2] : 0.88);
+            res.confidence = res.probs[2];
           }
         } else if (res.digit === '7' && res.probs) {
           // Open-top 4 with two distinct vertical stems at the top
           if (lTop >= 3 && rTop >= 3 && cTop <= 1 && botBaseSpanRatio < 0.40 && (res.probs[4] >= 0.005 || res.probs[4] > res.probs[7] * 0.10)) {
             res.digit = '4';
-            res.confidence = Math.max(0.95, res.probs[4] > 0.05 ? res.probs[4] : 0.92);
+            res.confidence = res.probs[4];
           }
         }
 
@@ -1414,14 +1414,13 @@
           if (singleRes.probs && singleRes.probs[expD] >= 0.15) {
             valStr = String(expD);
             numVal = expD;
-            avgConf = Math.max(0.95, singleRes.probs[expD]);
+            avgConf = singleRes.probs[expD];
           }
         }
 
         // Check if single digit already matches expectedTotal or is high-confidence single digit
         const matchesExpectedSingle = expectedTotal && parseFloat(valStr) === Math.round(expectedTotal);
         if (matchesExpectedSingle) {
-          avgConf = Math.max(0.95, avgConf);
           numVal = parseFloat(valStr);
         }
 
@@ -1462,22 +1461,22 @@
               }
               if ((lInk / Math.max(1, totI)) < 0.16 && r2.probs[3] >= 0.04) {
                 r2.digit = '3';
-                r2.confidence = Math.max(0.92, r2.probs[3]);
+                r2.confidence = r2.probs[3];
               } else if (r2.probs[7] >= 0.04) {
                 r2.digit = '7';
-                r2.confidence = Math.max(0.92, r2.probs[7]);
+                r2.confidence = r2.probs[7];
               }
             }
 
             // Evaluator cursive 2 vs 4 / 7 for tens digit in Total Marks:
             if ((r1.digit === '4' || r1.digit === '7') && r1.probs && (r1.probs[2] >= 0.05 || (expectedTotal && expectedTotal >= 20 && expectedTotal <= 30))) {
               r1.digit = '2';
-              r1.confidence = Math.max(0.92, r1.probs[2] || 0.85);
+              r1.confidence = r1.probs[2];
             }
 
             if (r2.digit === '2' && r2.probs && (r2.probs[4] >= 0.02 || r2.probs[4] > r2.probs[2] * 0.15)) {
               r2.digit = '4';
-              r2.confidence = Math.max(0.92, r2.probs[4] || 0.90);
+              r2.confidence = r2.probs[4];
             }
 
             const candVal = `${r1.digit}${r2.digit}`;
@@ -1644,69 +1643,8 @@
           });
         }
 
-        // Reconcile if single or pair of ambiguous marks caused discrepancy with detectedTotal
-        if (detectedTotal !== null && detectedTotal > 0 && Math.abs(calcSum - detectedTotal) > 0.01) {
-          let reconciled = false;
-          // Step 1: Check if any single attempted question has an alternative candidate matching detectedTotal
-          for (const m of marksList) {
-            if (m.id === 'total' || m.is_blank || typeof m.verified_val !== 'number') continue;
-            const diff = detectedTotal - (calcSum - m.verified_val);
-            const candInt = Math.round(diff);
-            if (candInt >= 0 && candInt <= 10 && Math.abs(diff - candInt) < 0.01) {
-              const prob = (m.probs && m.probs[candInt] !== undefined) ? m.probs[candInt] : 0;
-              if (prob >= 0.03 || m.confidence < 0.65) {
-                m.detected_str = String(candInt);
-                m.numeric_val = candInt;
-                m.verified_val = candInt;
-                m.confidence = Math.max(0.90, prob > 0.05 ? prob : 0.88);
-                m.status = 'Valid';
-                reconciled = true;
-                break;
-              }
-            }
-          }
-
-          // Step 2: If still not reconciled and 2 questions have alternative candidates (e.g. 2 vs 4 confusion)
-          if (!reconciled) {
-            const attempted = marksList.filter(m => m.id !== 'total' && !m.is_blank && typeof m.verified_val === 'number' && m.probs);
-            outerLoop: for (let i = 0; i < attempted.length; i++) {
-              for (let j = i + 1; j < attempted.length; j++) {
-                const m1 = attempted[i];
-                const m2 = attempted[j];
-                const baseSum = calcSum - m1.verified_val - m2.verified_val;
-                for (let c1 = 0; c1 <= 10; c1++) {
-                  if (m1.probs[c1] < 0.03 && c1 !== m1.verified_val) continue;
-                  const c2 = Math.round(detectedTotal - baseSum - c1);
-                  if (c2 >= 0 && c2 <= 10 && (m2.probs[c2] >= 0.03 || c2 === m2.verified_val)) {
-                    if (c1 !== m1.verified_val || c2 !== m2.verified_val) {
-                      m1.detected_str = String(c1);
-                      m1.numeric_val = c1;
-                      m1.verified_val = c1;
-                      m1.confidence = Math.max(0.90, m1.probs[c1] > 0.05 ? m1.probs[c1] : 0.88);
-                      m1.status = 'Valid';
-
-                      m2.detected_str = String(c2);
-                      m2.numeric_val = c2;
-                      m2.verified_val = c2;
-                      m2.confidence = Math.max(0.90, m2.probs[c2] > 0.05 ? m2.probs[c2] : 0.88);
-                      m2.status = 'Valid';
-                      reconciled = true;
-                      break outerLoop;
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          if (reconciled) {
-            calcSum = marksList.reduce(
-              (acc, m) => (m.id !== 'total' && !m.is_blank && typeof m.verified_val === 'number' ? acc + m.verified_val : acc),
-              0
-            );
-          }
-        }
-
+        // Keep question detections independent from the written total. A mismatch
+        // is useful review evidence and must not rewrite a digit to force a match.
         const hasAnyMarks = marksList.some(m => m.id !== 'total' && !m.is_blank && m.verified_val !== 'NA');
         const roundedSum = Math.round(calcSum * 10) / 10;
         resultsByIA[iaName] = marksList;
