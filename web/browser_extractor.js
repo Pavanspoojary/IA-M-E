@@ -1629,8 +1629,8 @@
     }
 
     /**
-     * Export data to CSV string and download via Blob.
-     * Formats academic marks matrix with proper headers, ordering, and filled values.
+     * Export data to minimal, proper RFC 4180 CSV file and download via Blob.
+     * Clean header on Row 1, no superfluous quotes around numbers or clean text.
      */
     downloadCsv(extractionData, filename = 'IA_Marks_Evaluation.csv') {
       const sheets = extractionData.sheets || [];
@@ -1659,33 +1659,33 @@
             { id: '4a', label: '4.a' }, { id: '4b', label: '4.b' }, { id: '4c', label: '4.c' },
           ]
         : [
-            { id: '1a', label: '1.a' }, { id: '1b', label: '1.b' },
-            { id: '2a', label: '2.a' }, { id: '2b', label: '2.b' },
-            { id: '3a', label: '3.a' }, { id: '3b', label: '3.b' },
-            { id: '3b_alt', label: '3.b-alt' },
-            { id: '4a', label: '4.a' }, { id: '4b', label: '4.b' },
+            { id: '1a', label: '1a' }, { id: '1b', label: '1b' },
+            { id: '2a', label: '2a' }, { id: '2b', label: '2b' },
+            { id: '3a', label: '3a' }, { id: '3b', label: '3b' },
+            { id: '3b_alt', label: '3b-alt' },
+            { id: '4a', label: '4a' }, { id: '4b', label: '4b' },
           ];
 
-      const headerLine = [
-        '"Sheet / Student"',
-        '"Assessment"',
-        ...qColumns.map(q => `"${q.label}"`),
-        '"Calculated Total"',
-        '"Sheet Detected Total"',
-        '"Verification Status"',
-      ].join(',');
+      // Proper RFC 4180 CSV escaping: only quote if field contains comma, quote, or newline
+      const toCsvField = (val) => {
+        if (val === null || val === undefined) return '';
+        const s = String(val);
+        if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+          return `"${s.replace(/"/g, '""')}"`;
+        }
+        return s;
+      };
 
-      const lines = [headerLine];
+      const headerCols = ['Sheet', 'Assessment', ...qColumns.map(q => q.label), 'Total', 'Status'];
+      const lines = [headerCols.map(toCsvField).join(',')];
 
-      // Sort sheets in ascending numerical order
       const sortedSheets = [...sheets].sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0));
+      const canonicalOrder = ['IA 1', 'IA 2', 'IA 3'];
 
       sortedSheets.forEach((s) => {
-        const sLabel = `"${s.sheet_label || ('Sheet ' + (s.sheet_index || 1))}"`;
+        const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
         const resultsByIA = s.results_by_ia || {};
 
-        // Canonical assessment ordering: IA 1 -> IA 2 -> IA 3
-        const canonicalOrder = ['IA 1', 'IA 2', 'IA 3'];
         const iaKeys = Object.keys(resultsByIA).sort((a, b) => {
           const idxA = canonicalOrder.indexOf(a);
           const idxB = canonicalOrder.indexOf(b);
@@ -1703,50 +1703,56 @@
             if (m.label) markMap[normKey(m.label)] = m;
           });
 
-          const rowVals = [sLabel, `"${ia}"`];
+          const rowVals = [sLabel, ia];
+          let allBlank = true;
 
           qColumns.forEach((col) => {
             const m = markMap[normKey(col.id)] || markMap[normKey(col.label)];
             if (!m || m.is_blank || m.status === 'Blank') {
-              rowVals.push('"-"');
+              rowVals.push('-');
             } else if (m.detected_str === '-' && (m.verified_val === 0 || m.verified_val === null)) {
-              rowVals.push('"-"');
+              rowVals.push('-');
             } else if (m.verified_val !== null && m.verified_val !== undefined) {
               rowVals.push(String(m.verified_val));
+              allBlank = false;
             } else if (m.numeric_val !== null && m.numeric_val !== undefined) {
               rowVals.push(String(m.numeric_val));
+              allBlank = false;
             } else {
-              rowVals.push('"-"');
+              rowVals.push('-');
             }
           });
 
-          // Summary totals
           const summary = (s.summary_totals && s.summary_totals[ia]) || {};
           const totMark = marksList.find((m) => normKey(m.id) === 'total' || normKey(m.label).includes('total'));
           const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
           const detTotal = (totMark && totMark.verified_val !== null && totMark.verified_val !== undefined)
             ? Number(totMark.verified_val)
-            : (summary.detected_total !== undefined && summary.detected_total !== null && summary.detected_total > 0 ? Number(summary.detected_total) : '-');
+            : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? Number(summary.detected_total) : null);
 
-          rowVals.push(String(calcSum));
-          rowVals.push(String(detTotal));
+          const finalTotal = (detTotal !== null && detTotal > 0) ? detTotal : (calcSum > 0 ? calcSum : (allBlank ? '-' : 0));
+          rowVals.push(String(finalTotal));
 
-          const status = summary.matches ? 'Verified Match' : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? 'Discrepancy Detected' : 'Evaluation Ready');
-          rowVals.push(`"${status}"`);
+          let status = 'Valid';
+          if (detTotal !== null && detTotal > 0 && Math.abs(calcSum - detTotal) > 0.01) {
+            status = 'Discrepancy';
+          } else if (allBlank) {
+            status = 'Blank';
+          }
+          rowVals.push(status);
 
-          lines.push(rowVals.join(','));
+          lines.push(rowVals.map(toCsvField).join(','));
         });
       });
 
-      // UTF-8 BOM \ufeff ensures Excel and Numbers open with proper columns & character encoding
-      const csvContent = '\ufeff' + lines.join('\r\n');
+      const csvContent = '\ufeff' + lines.join('\r\n') + '\r\n';
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       this._triggerDownload(blob, filename);
     }
 
     /**
-     * Export data to XLSX Excel file and download.
-     * Features professional academic styling, merged titles, auto-column widths, and clean question alignment.
+     * Export data to minimal, clean Excel file (.xlsx) and download.
+     * Starts directly on Row 1 with clean table headers, no banner fluff.
      */
     downloadXlsx(extractionData, filename = 'IA_Marks_Evaluation.xlsx') {
       if (typeof XLSX === 'undefined') {
@@ -1779,34 +1785,19 @@
             { id: '4a', label: '4.a' }, { id: '4b', label: '4.b' }, { id: '4c', label: '4.c' },
           ]
         : [
-            { id: '1a', label: '1.a' }, { id: '1b', label: '1.b' },
-            { id: '2a', label: '2.a' }, { id: '2b', label: '2.b' },
-            { id: '3a', label: '3.a' }, { id: '3b', label: '3.b' },
-            { id: '3b_alt', label: '3.b-alt' },
-            { id: '4a', label: '4.a' }, { id: '4b', label: '4.b' },
+            { id: '1a', label: '1a' }, { id: '1b', label: '1b' },
+            { id: '2a', label: '2a' }, { id: '2b', label: '2b' },
+            { id: '3a', label: '3a' }, { id: '3b', label: '3b' },
+            { id: '3b_alt', label: '3b-alt' },
+            { id: '4a', label: '4a' }, { id: '4b', label: '4b' },
           ];
 
       const sortedSheets = [...sheets].sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0));
       const canonicalOrder = ['IA 1', 'IA 2', 'IA 3'];
-      const totalCols = 2 + qColumns.length + 3; // Sheet, Assessment, Questions..., CalcTotal, DetTotal, Status
-      const lastColIdx = totalCols - 1;
 
-      const thinBorder = {
-        top: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        left: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        right: { style: 'thin', color: { rgb: 'D9D9D9' } },
-      };
-
-      // --- Worksheet 1: Summary Matrix ---
-      const summaryRows = [
-        ['CONTINUOUS INTERNAL ASSESSMENT (IA) MARKS LEDGER'],
-        ['Generated via Neural Bluebook Extraction Engine | Verified Gradebook Matrix'],
-        [],
-        ['Sheet / Student', 'Assessment', ...qColumns.map(q => q.label), 'Calculated Total', 'Sheet Detected Total', 'Verification Status'],
-      ];
-
-      const summaryDataRowsCount = [];
+      // Row 1: Clean Minimal Table Headers
+      const headerRow = ['Sheet', 'Assessment', ...qColumns.map(q => q.label), 'Total', 'Status'];
+      const dataRows = [headerRow];
 
       sortedSheets.forEach((s) => {
         const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
@@ -1830,6 +1821,7 @@
           });
 
           const row = [sLabel, ia];
+          let allBlank = true;
 
           qColumns.forEach((col) => {
             const m = markMap[normKey(col.id)] || markMap[normKey(col.label)];
@@ -1839,8 +1831,10 @@
               row.push('-');
             } else if (m.verified_val !== null && m.verified_val !== undefined) {
               row.push(Number(m.verified_val));
+              allBlank = false;
             } else if (m.numeric_val !== null && m.numeric_val !== undefined) {
               row.push(Number(m.numeric_val));
+              allBlank = false;
             } else {
               row.push('-');
             }
@@ -1851,317 +1845,74 @@
           const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
           const detTotal = (totMark && totMark.verified_val !== null && totMark.verified_val !== undefined)
             ? Number(totMark.verified_val)
-            : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? Number(summary.detected_total) : '-');
+            : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? Number(summary.detected_total) : null);
 
-          row.push(calcSum);
-          row.push(detTotal);
+          const finalTotal = (detTotal !== null && detTotal > 0) ? detTotal : (calcSum > 0 ? calcSum : (allBlank ? '-' : 0));
+          row.push(typeof finalTotal === 'number' ? finalTotal : String(finalTotal));
 
-          const status = summary.matches ? 'Verified Match' : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? 'Discrepancy Detected' : 'Evaluation Ready');
+          let status = 'Valid';
+          if (detTotal !== null && detTotal > 0 && Math.abs(calcSum - detTotal) > 0.01) {
+            status = 'Discrepancy';
+          } else if (allBlank) {
+            status = 'Blank';
+          }
           row.push(status);
 
-          summaryRows.push(row);
-          summaryDataRowsCount.push(true);
+          dataRows.push(row);
         });
       });
 
-      const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+      const ws = XLSX.utils.aoa_to_sheet(dataRows);
 
-      // Title & Subtitle Cell Merging
-      wsSummary['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: lastColIdx } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: lastColIdx } },
+      const thinBorder = {
+        top: { style: 'thin', color: { rgb: 'CBD5E1' } },
+        bottom: { style: 'thin', color: { rgb: 'CBD5E1' } },
+        left: { style: 'thin', color: { rgb: 'CBD5E1' } },
+        right: { style: 'thin', color: { rgb: 'CBD5E1' } },
+      };
+
+      ws['!rows'] = [
+        { hpt: 24 }, // Header row
+        ...dataRows.slice(1).map(() => ({ hpt: 20 })),
       ];
 
-      // Row Heights (pt)
-      wsSummary['!rows'] = [
-        { hpt: 26 }, // Title
-        { hpt: 18 }, // Subtitle
-        { hpt: 6 },  // Spacer
-        { hpt: 24 }, // Header
-        ...summaryDataRowsCount.map(() => ({ hpt: 20 })),
-      ];
-
-      // Auto Column Widths
-      wsSummary['!cols'] = [
-        { wch: 22 }, // Sheet / Student
+      ws['!cols'] = [
+        { wch: 18 }, // Sheet
         { wch: 14 }, // Assessment
         ...qColumns.map(() => ({ wch: 7.5 })), // Question columns
-        { wch: 16 }, // Calculated Total
-        { wch: 20 }, // Sheet Detected Total
-        { wch: 22 }, // Verification Status
+        { wch: 10 }, // Total
+        { wch: 14 }, // Status
       ];
 
-      // Professional Cell Styling (supported natively via xlsx-js-style)
-      const rangeSum = XLSX.utils.decode_range(wsSummary['!ref'] || 'A1:A1');
-      for (let R = rangeSum.s.r; R <= rangeSum.e.r; ++R) {
-        for (let C = rangeSum.s.c; C <= rangeSum.e.c; ++C) {
+      const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+      for (let R = range.s.r; R <= range.e.r; ++R) {
+        for (let C = range.s.c; C <= range.e.c; ++C) {
           const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-          const cell = wsSummary[cellRef];
+          const cell = ws[cellRef];
           if (!cell) continue;
 
           if (R === 0) {
             cell.s = {
-              font: { name: 'Segoe UI', sz: 14, bold: true, color: { rgb: '1F4E79' } },
-              alignment: { horizontal: 'center', vertical: 'center' },
-            };
-          } else if (R === 1) {
-            cell.s = {
-              font: { name: 'Segoe UI', sz: 9.5, italic: true, color: { rgb: '595959' } },
-              alignment: { horizontal: 'center', vertical: 'center' },
-            };
-          } else if (R === 3) {
-            cell.s = {
-              fill: { fgColor: { rgb: '1F4E79' } },
-              font: { name: 'Segoe UI', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
-              alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+              fill: { fgColor: { rgb: '1E293B' } },
+              font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+              alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
               border: thinBorder,
             };
-          } else if (R >= 4) {
-            if (C === 0) {
-              cell.s = {
-                font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '1A202C' } },
-                alignment: { horizontal: 'left', vertical: 'center' },
-                border: thinBorder,
-              };
-            } else if (C === 1) {
-              cell.s = {
-                font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '2B6CB0' } },
-                alignment: { horizontal: 'center', vertical: 'center' },
-                border: thinBorder,
-              };
-            } else if (C >= 2 && C < 2 + qColumns.length) {
-              if (cell.v === '-') {
-                cell.s = {
-                  font: { name: 'Segoe UI', sz: 10, color: { rgb: 'A0AEC0' } },
-                  alignment: { horizontal: 'center', vertical: 'center' },
-                  border: thinBorder,
-                };
-              } else {
-                cell.s = {
-                  font: { name: 'Segoe UI', sz: 10.5, bold: true, color: { rgb: '1A202C' } },
-                  alignment: { horizontal: 'center', vertical: 'center' },
-                  border: thinBorder,
-                };
-              }
-            } else if (C === 2 + qColumns.length) {
-              cell.s = {
-                fill: { fgColor: { rgb: 'EDF2F7' } },
-                font: { name: 'Segoe UI', sz: 11, bold: true, color: { rgb: '1A365D' } },
-                alignment: { horizontal: 'center', vertical: 'center' },
-                border: thinBorder,
-              };
-            } else if (C === 2 + qColumns.length + 1) {
-              cell.s = {
-                fill: { fgColor: { rgb: 'F7FAFC' } },
-                font: { name: 'Segoe UI', sz: 10.5, color: { rgb: '2D3748' } },
-                alignment: { horizontal: 'center', vertical: 'center' },
-                border: thinBorder,
-              };
-            } else if (C === 2 + qColumns.length + 2) {
-              if (cell.v === 'Verified Match') {
-                cell.s = {
-                  fill: { fgColor: { rgb: 'DEF7EC' } },
-                  font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '03543F' } },
-                  alignment: { horizontal: 'center', vertical: 'center' },
-                  border: thinBorder,
-                };
-              } else if (cell.v === 'Discrepancy Detected') {
-                cell.s = {
-                  fill: { fgColor: { rgb: 'FDE8E8' } },
-                  font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '9B1C1C' } },
-                  alignment: { horizontal: 'center', vertical: 'center' },
-                  border: thinBorder,
-                };
-              } else {
-                cell.s = {
-                  fill: { fgColor: { rgb: 'EBF5FF' } },
-                  font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '1E429F' } },
-                  alignment: { horizontal: 'center', vertical: 'center' },
-                  border: thinBorder,
-                };
-              }
+          } else {
+            const isTotalCol = (C === range.e.c - 1);
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 10, bold: isTotalCol, color: { rgb: '1E293B' } },
+              alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
+              border: thinBorder,
+            };
+            if (isTotalCol) {
+              cell.s.fill = { fgColor: { rgb: 'F1F5F9' } };
             }
           }
         }
       }
 
-      XLSX.utils.book_append_sheet(wb, wsSummary, 'IA Marks Summary');
-
-      // --- Worksheet 2: Detailed Question Breakdown ---
-      const detailRows = [
-        ['DETAILED QUESTION BREAKDOWN AND RECOGNITION AUDIT'],
-        ['Atomic Handwritten Stroke Digitization & Confidence Analysis'],
-        [],
-        ['Sheet / Student', 'Assessment', 'Question ID', 'Question Label', 'Maximum Marks', 'Raw Detected', 'Confidence (%)', 'Verified Mark', 'Status'],
-      ];
-
-      const detailDataCount = [];
-
-      sortedSheets.forEach((s) => {
-        const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
-        const resultsByIA = s.results_by_ia || {};
-
-        const iaKeys = Object.keys(resultsByIA).sort((a, b) => {
-          const idxA = canonicalOrder.indexOf(a);
-          const idxB = canonicalOrder.indexOf(b);
-          if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-          return a.localeCompare(b);
-        });
-
-        iaKeys.forEach((ia) => {
-          const marksList = resultsByIA[ia] || [];
-          marksList.forEach((m) => {
-            const confPct = m.confidence !== null && m.confidence !== undefined ? Math.round(m.confidence * 100) : '-';
-            detailRows.push([
-              sLabel,
-              ia,
-              m.id || '',
-              m.label || '',
-              m.max || 10,
-              m.detected_str || '-',
-              confPct,
-              m.verified_val !== null ? m.verified_val : 0,
-              m.status || 'Valid',
-            ]);
-            detailDataCount.push(true);
-          });
-        });
-      });
-
-      const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-      wsDetail['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: 8 } },
-      ];
-      wsDetail['!rows'] = [
-        { hpt: 26 }, { hpt: 18 }, { hpt: 6 }, { hpt: 24 },
-        ...detailDataCount.map(() => ({ hpt: 19 })),
-      ];
-      wsDetail['!cols'] = [
-        { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 },
-      ];
-
-      const rangeDet = XLSX.utils.decode_range(wsDetail['!ref'] || 'A1:A1');
-      for (let R = rangeDet.s.r; R <= rangeDet.e.r; ++R) {
-        for (let C = rangeDet.s.c; C <= rangeDet.e.c; ++C) {
-          const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-          const cell = wsDetail[cellRef];
-          if (!cell) continue;
-
-          if (R === 0) {
-            cell.s = {
-              font: { name: 'Segoe UI', sz: 14, bold: true, color: { rgb: '1F4E79' } },
-              alignment: { horizontal: 'center', vertical: 'center' },
-            };
-          } else if (R === 1) {
-            cell.s = {
-              font: { name: 'Segoe UI', sz: 9.5, italic: true, color: { rgb: '595959' } },
-              alignment: { horizontal: 'center', vertical: 'center' },
-            };
-          } else if (R === 3) {
-            cell.s = {
-              fill: { fgColor: { rgb: '1F4E79' } },
-              font: { name: 'Segoe UI', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
-              alignment: { horizontal: 'center', vertical: 'center' },
-              border: thinBorder,
-            };
-          } else if (R >= 4) {
-            cell.s = {
-              font: { name: 'Segoe UI', sz: 10, color: { rgb: '1A202C' } },
-              alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
-              border: thinBorder,
-            };
-          }
-        }
-      }
-
-      XLSX.utils.book_append_sheet(wb, wsDetail, 'Detailed Breakdown');
-
-      // --- Worksheet 3: Discrepancy & Verification Audit ---
-      const auditRows = [
-        ['EXAMINATION INTEGRITY & TOTAL DISCREPANCY AUDIT'],
-        ['Automated Summation Verification vs Faculty Handwritten Total'],
-        [],
-        ['Sheet / Student', 'Assessment', 'Calculated Question Sum', 'Sheet Detected Total', 'Difference', 'Reconciliation Status'],
-      ];
-
-      const auditDataCount = [];
-
-      sortedSheets.forEach((s) => {
-        const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
-        const resultsByIA = s.results_by_ia || {};
-        const iaKeys = Object.keys(resultsByIA).sort();
-
-        iaKeys.forEach((ia) => {
-          const summary = (s.summary_totals && s.summary_totals[ia]) || {};
-          const marksList = resultsByIA[ia] || [];
-          const totMark = marksList.find((m) => normKey(m.id) === 'total');
-          const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
-          const detTotal = totMark && totMark.verified_val !== null ? Number(totMark.verified_val) : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? Number(summary.detected_total) : null);
-          const diff = detTotal !== null ? Math.round((calcSum - detTotal) * 10) / 10 : '-';
-          const recStatus = detTotal === null ? 'No Sheet Total' : (Math.abs(calcSum - detTotal) < 0.01 ? 'Verified Match' : 'Discrepancy Flagged');
-
-          auditRows.push([
-            sLabel,
-            ia,
-            calcSum,
-            detTotal !== null ? detTotal : '-',
-            diff,
-            recStatus,
-          ]);
-          auditDataCount.push(true);
-        });
-      });
-
-      const wsAudit = XLSX.utils.aoa_to_sheet(auditRows);
-      wsAudit['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: 5 } },
-      ];
-      wsAudit['!rows'] = [
-        { hpt: 26 }, { hpt: 18 }, { hpt: 6 }, { hpt: 24 },
-        ...auditDataCount.map(() => ({ hpt: 20 })),
-      ];
-      wsAudit['!cols'] = [
-        { wch: 22 }, { wch: 14 }, { wch: 24 }, { wch: 22 }, { wch: 14 }, { wch: 24 },
-      ];
-
-      const rangeAud = XLSX.utils.decode_range(wsAudit['!ref'] || 'A1:A1');
-      for (let R = rangeAud.s.r; R <= rangeAud.e.r; ++R) {
-        for (let C = rangeAud.s.c; C <= rangeAud.e.c; ++C) {
-          const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-          const cell = wsAudit[cellRef];
-          if (!cell) continue;
-
-          if (R === 0) {
-            cell.s = {
-              font: { name: 'Segoe UI', sz: 14, bold: true, color: { rgb: '1F4E79' } },
-              alignment: { horizontal: 'center', vertical: 'center' },
-            };
-          } else if (R === 1) {
-            cell.s = {
-              font: { name: 'Segoe UI', sz: 9.5, italic: true, color: { rgb: '595959' } },
-              alignment: { horizontal: 'center', vertical: 'center' },
-            };
-          } else if (R === 3) {
-            cell.s = {
-              fill: { fgColor: { rgb: '1F4E79' } },
-              font: { name: 'Segoe UI', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
-              alignment: { horizontal: 'center', vertical: 'center' },
-              border: thinBorder,
-            };
-          } else if (R >= 4) {
-            cell.s = {
-              font: { name: 'Segoe UI', sz: 10, color: { rgb: '1A202C' } },
-              alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
-              border: thinBorder,
-            };
-          }
-        }
-      }
-
-      XLSX.utils.book_append_sheet(wb, wsAudit, 'Integrity Audit');
-
+      XLSX.utils.book_append_sheet(wb, ws, 'IA Marks Summary');
       XLSX.writeFile(wb, filename);
     }
 

@@ -864,34 +864,21 @@ class EvalSheetExtractor:
 
         q_cols = self._get_question_columns(sheets)
 
-        # Sheet 1: Marks Summary Matrix
-        last_col_letter = openpyxl.utils.get_column_letter(len(q_cols) + 5)
-        ws.merge_cells(f"A1:{last_col_letter}1")
-        ws["A1"] = "CONTINUOUS INTERNAL ASSESSMENT (IA) MARKS LEDGER"
-        ws["A1"].font = title_font
-        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-        ws.row_dimensions[1].height = 28
+        # Sheet 1: Marks Summary Matrix (Minimal, starts directly on Row 1)
+        headers = ["Sheet", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
+        col_widths = [18, 14] + [8] * len(q_cols) + [10, 14]
 
-        ws.merge_cells(f"A2:{last_col_letter}2")
-        ws["A2"] = "Generated via Neural Bluebook Extraction Engine | Verified Gradebook Matrix"
-        ws["A2"].font = Font(name="Segoe UI", size=9.5, italic=True, color="595959")
-        ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
-        ws.row_dimensions[2].height = 18
-
-        headers = ["Sheet / Student", "Assessment"] + [lbl for _, lbl in q_cols] + ["Calculated Total", "Sheet Detected Total", "Verification Status"]
-        col_widths = [22, 14] + [8] * len(q_cols) + [16, 20, 22]
-
-        ws.append([])
         ws.append(headers)
-        ws.row_dimensions[4].height = 24
+        ws.row_dimensions[1].height = 24
 
         for col_idx in range(1, len(headers) + 1):
-            cell = ws.cell(row=4, column=col_idx)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = center_align
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = Font(name="Segoe UI", size=10.5, bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+            cell.alignment = left_align if col_idx == 1 else center_align
+            cell.border = thin_border
 
-        current_row = 5
+        current_row = 2
         for sheet in sheets:
             sheet_label = sheet.get("sheet_label") or f"Sheet {sheet.get('sheet_index', 1)}"
             res_by_ia = sheet.get("results_by_ia", {})
@@ -909,6 +896,7 @@ class EvalSheetExtractor:
 
                 q_vals = []
                 calc_sum = 0.0
+                all_blank = True
                 for qid, qlbl in q_cols:
                     k1 = str(qid).lower().replace(" ", "").replace(".", "")
                     k2 = str(qlbl).lower().replace(" ", "").replace(".", "")
@@ -916,6 +904,7 @@ class EvalSheetExtractor:
                     v_str = self._format_mark_display(m_obj)
                     q_vals.append(v_str)
                     if v_str not in ("-", ""):
+                        all_blank = False
                         try:
                             calc_sum += float(v_str)
                         except ValueError:
@@ -932,16 +921,18 @@ class EvalSheetExtractor:
                         det_total = None
 
                 calc_str = self._format_number_val(calc_sum)
-                det_str = self._format_number_val(det_total) if det_total is not None and det_total > 0 else (tot_val if tot_val not in ("-", "0") else "-")
+                final_total = tot_val if tot_val not in ("-", "") else (calc_str if not all_blank else "-")
 
                 if det_total is not None and det_total > 0 and abs(calc_sum - det_total) < 0.01:
-                    row_status = "Verified Match"
+                    row_status = "Valid"
                 elif det_total is not None and det_total > 0:
-                    row_status = "Discrepancy Detected"
+                    row_status = "Discrepancy"
+                elif all_blank:
+                    row_status = "Blank"
                 else:
-                    row_status = "Evaluation Ready"
+                    row_status = "Valid"
 
-                row_vals = [sheet_label, ia_name] + q_vals + [calc_str, det_str, row_status]
+                row_vals = [sheet_label, ia_name] + q_vals + [final_total, row_status]
                 ws.append(row_vals)
                 ws.row_dimensions[current_row].height = 20
 
@@ -950,26 +941,15 @@ class EvalSheetExtractor:
                     cell.border = thin_border
                     cell.alignment = left_align if col_idx == 1 else center_align
 
-                    # Calculated Total styling
-                    if col_idx == len(row_vals) - 2:
-                        cell.font = total_font
+                    # Total column styling
+                    if col_idx == len(row_vals) - 1:
+                        cell.font = bold_font
                         cell.fill = total_fill
-                    # Verification Status styling
-                    elif col_idx == len(row_vals):
-                        if row_status == "Verified Match":
-                            cell.font = verified_font
-                            cell.fill = verified_fill
-                        elif row_status == "Discrepancy Detected":
-                            cell.font = discrepancy_font
-                            cell.fill = discrepancy_fill
-                        else:
-                            cell.font = regular_font
-                    # Question columns
-                    elif 3 <= col_idx < len(row_vals) - 2:
+                    elif 3 <= col_idx < len(row_vals) - 1:
                         if cell.value == "-":
                             cell.font = dim_font
                         else:
-                            cell.font = bold_font
+                            cell.font = regular_font
                     else:
                         cell.font = regular_font
 
@@ -979,80 +959,23 @@ class EvalSheetExtractor:
             col_letter = openpyxl.utils.get_column_letter(idx)
             ws.column_dimensions[col_letter].width = width
 
-        # Sheet 2: Detailed Question-Wise Breakdown
-        ws_det = wb.create_sheet(title="Detailed Extraction")
-        ws_det.merge_cells("A1:F1")
-        ws_det["A1"] = "DETAILED QUESTION-WISE EXTRACTION AUDIT"
-        ws_det["A1"].font = title_font
-        ws_det["A1"].alignment = left_align
-        ws_det.row_dimensions[1].height = 28
-
-        det_headers = ["Sheet / Page", "Assessment", "Question", "Detected Mark", "Verified Mark", "Status"]
-        det_col_widths = [18, 14, 16, 16, 16, 18]
-
-        ws_det.append([])
-        ws_det.append(det_headers)
-        ws_det.row_dimensions[3].height = 24
-
-        for col_idx in range(1, len(det_headers) + 1):
-            cell = ws_det.cell(row=3, column=col_idx)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = center_align
-
-        det_row = 4
-        for sheet in sheets:
-            sheet_label = sheet.get("sheet_label") or f"Sheet {sheet.get('sheet_index', 1)}"
-            for ia_name, marks in sheet.get("results_by_ia", {}).items():
-                for m in marks:
-                    det_str = m.get("detected_str", "")
-                    ver_val = m.get("verified_val")
-                    ver_str = self._format_number_val(ver_val) if ver_val is not None else ""
-                    st = m.get("status", "")
-
-                    ws_det.append([
-                        sheet_label,
-                        ia_name,
-                        m.get("label", m.get("id", "")),
-                        det_str,
-                        ver_str,
-                        st,
-                    ])
-                    ws_det.row_dimensions[det_row].height = 20
-                    for col_idx in range(1, 7):
-                        cell = ws_det.cell(row=det_row, column=col_idx)
-                        cell.font = bold_font if m.get("id") == "total" else regular_font
-                        cell.border = thin_border
-                        cell.alignment = left_align if col_idx in (1, 3) else center_align
-                    det_row += 1
-
-        for idx, width in enumerate(det_col_widths, start=1):
-            col_letter = openpyxl.utils.get_column_letter(idx)
-            ws_det.column_dimensions[col_letter].width = width
-
-        # For multi-sheet workbooks, include dedicated tabs per sheet
+        # For multi-sheet workbooks, include dedicated tabs per sheet (minimal: starts on Row 1)
         if len(sheets) > 1:
             for s_idx, sheet in enumerate(sheets, start=1):
                 sheet_title = f"Sheet {s_idx}"
                 ws_sub = wb.create_sheet(title=sheet_title)
-                ws_sub.merge_cells("A1:E1")
-                ws_sub["A1"] = f"MARKS EVALUATION - {sheet.get('sheet_label', sheet_title)}"
-                ws_sub["A1"].font = title_font
-                ws_sub["A1"].alignment = left_align
-                ws_sub.row_dimensions[1].height = 28
-
                 sub_headers = ["Assessment", "Question", "Detected Mark", "Verified Mark", "Status"]
-                ws_sub.append([])
                 ws_sub.append(sub_headers)
-                ws_sub.row_dimensions[3].height = 24
+                ws_sub.row_dimensions[1].height = 24
 
                 for col_idx in range(1, 6):
-                    cell = ws_sub.cell(row=3, column=col_idx)
-                    cell.font = header_font
-                    cell.fill = header_fill
+                    cell = ws_sub.cell(row=1, column=col_idx)
+                    cell.font = Font(name="Segoe UI", size=10.5, bold=True, color="FFFFFF")
+                    cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
                     cell.alignment = center_align
+                    cell.border = thin_border
 
-                sub_row = 4
+                sub_row = 2
                 for ia_name, marks in sheet.get("results_by_ia", {}).items():
                     for m in marks:
                         det_str = m.get("detected_str", "")
@@ -1173,7 +1096,7 @@ class EvalSheetExtractor:
 
         q_cols = self._get_question_columns(sheets)
 
-        headers = ["Sheet / Student", "Assessment"] + [lbl for _, lbl in q_cols] + ["Calculated Total", "Sheet Detected Total", "Verification Status"]
+        headers = ["Sheet", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
         writer.writerow(headers)
 
         canonical_order = ["IA 1", "IA 2", "IA 3"]
@@ -1199,6 +1122,7 @@ class EvalSheetExtractor:
 
                 q_vals = []
                 calc_sum = 0.0
+                all_blank = True
                 for qid, qlbl in q_cols:
                     k1 = str(qid).lower().replace(" ", "").replace(".", "")
                     k2 = str(qlbl).lower().replace(" ", "").replace(".", "")
@@ -1206,6 +1130,7 @@ class EvalSheetExtractor:
                     v_str = self._format_mark_display(m_obj)
                     q_vals.append(v_str)
                     if v_str not in ("-", ""):
+                        all_blank = False
                         try:
                             calc_sum += float(v_str)
                         except ValueError:
@@ -1223,15 +1148,17 @@ class EvalSheetExtractor:
                         det_total = None
 
                 calc_str = self._format_number_val(calc_sum)
-                det_str = self._format_number_val(det_total) if det_total is not None and det_total > 0 else (tot_val if tot_val not in ("-", "0") else "-")
+                final_total = tot_val if tot_val not in ("-", "") else (calc_str if not all_blank else "-")
 
                 if det_total is not None and det_total > 0 and abs(calc_sum - det_total) < 0.01:
-                    row_status = "Verified Match"
+                    row_status = "Valid"
                 elif det_total is not None and det_total > 0:
-                    row_status = "Discrepancy Detected"
+                    row_status = "Discrepancy"
+                elif all_blank:
+                    row_status = "Blank"
                 else:
-                    row_status = "Evaluation Ready"
+                    row_status = "Valid"
 
-                writer.writerow([sheet_label, ia_name] + q_vals + [calc_str, det_str, row_status])
+                writer.writerow([sheet_label, ia_name] + q_vals + [final_total, row_status])
 
         return out.getvalue()
