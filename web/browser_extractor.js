@@ -705,6 +705,32 @@
           labels = new cv.Mat();
           stats = new cv.Mat();
           centroids = new cv.Mat();
+
+          // Strip any horizontal grid lines at top (cy <= 3) and bottom (cy >= ih - 4)
+          for (let y = 0; y < ih; y++) {
+            if (y <= 3 || y >= ih - 4) {
+              let run = 0;
+              for (let x = 0; x < iw; x++) {
+                if (th.data[y * iw + x] > 0) run++;
+              }
+              if (run >= Math.min(18, Math.round(iw * 0.35))) {
+                for (let x = 0; x < iw; x++) th.data[y * iw + x] = 0;
+              }
+            }
+          }
+          // Also strip vertical grid lines at left (cx <= 3) and right (cx >= iw - 4)
+          for (let x = 0; x < iw; x++) {
+            if (x <= 3 || x >= iw - 4) {
+              let run = 0;
+              for (let y = 0; y < ih; y++) {
+                if (th.data[y * iw + x] > 0) run++;
+              }
+              if (run >= Math.min(15, Math.round(ih * 0.40))) {
+                for (let y = 0; y < ih; y++) th.data[y * iw + x] = 0;
+              }
+            }
+          }
+
           const numL = cv.connectedComponentsWithStats(th, labels, stats, centroids);
 
           for (let l = 1; l < numL; l++) {
@@ -1207,10 +1233,12 @@
       const digitBoxes = this.segmentDigits(cellInfo, row);
       const tokens = [];
       let totalConf = 0;
+      let lastDigitProbs = null;
 
       for (const box of digitBoxes) {
         const tensorData = this.create28x28Tensor(cellInfo, box);
         const res = await this.classifyDigit(tensorData);
+        lastDigitProbs = res.probs || null;
 
         // Invariant checks for messy handwriting edge cases
         const boxW = box.maxX - box.minX + 1;
@@ -1221,11 +1249,17 @@
         const topY = box.minY + Math.round(boxH * 0.35);
         const midY1 = box.minY + Math.round(boxH * 0.30);
         const midY2 = box.minY + Math.round(boxH * 0.55);
+        const midLeftX = box.minX + Math.round(boxW * 0.30);
+        const botBaseY = box.minY + Math.round(boxH * 0.78);
+        const midCrossY1 = box.minY + Math.round(boxH * 0.40);
+        const midCrossY2 = box.minY + Math.round(boxH * 0.70);
 
         let totInk = 0, leftInk = 0;
         let botInk = 0, botLeftInk = 0, botRightInk = 0;
-        let topRightInk = 0, midRightInk = 0;
+        let topRightInk = 0, topLeftInk = 0, midRightInk = 0, midLeftInk = 0;
         let lTop = 0, rTop = 0, cTop = 0;
+        let botBaseInk = 0, botBaseMinX = box.maxX, botBaseMaxX = box.minX;
+        let midCrossInk = 0, midCrossMinX = box.maxX, midCrossMaxX = box.minX;
 
         for (let cy = box.minY; cy <= box.maxY; cy++) {
           const rOff = cy * cellInfo.w;
@@ -1240,12 +1274,24 @@
               }
               if (cy <= topY) {
                 if (cx >= midX) topRightInk++;
+                else topLeftInk++;
                 if (cx < midX) lTop++;
                 else rTop++;
                 if (Math.abs(cx - midX) <= 1) cTop++;
               }
-              if (cy >= midY1 && cy <= midY2 && cx >= midX) {
-                midRightInk++;
+              if (cy >= midY1 && cy <= midY2) {
+                if (cx >= midX) midRightInk++;
+                if (cx <= midLeftX) midLeftInk++;
+              }
+              if (cy >= botBaseY) {
+                botBaseInk++;
+                if (cx < botBaseMinX) botBaseMinX = cx;
+                if (cx > botBaseMaxX) botBaseMaxX = cx;
+              }
+              if (cy >= midCrossY1 && cy <= midCrossY2) {
+                midCrossInk++;
+                if (cx < midCrossMinX) midCrossMinX = cx;
+                if (cx > midCrossMaxX) midCrossMaxX = cx;
               }
             }
           }
@@ -1253,10 +1299,14 @@
 
         const leftFrac = leftInk / Math.max(1, totInk);
         const botLeftFrac = botLeftInk / Math.max(1, botInk);
+        const botBaseSpan = (botBaseInk > 0) ? (botBaseMaxX - botBaseMinX + 1) : 0;
+        const botBaseSpanRatio = botBaseSpan / Math.max(1, boxW);
+        const midCrossSpan = (midCrossInk > 0) ? (midCrossMaxX - midCrossMinX + 1) : 0;
+        const midCrossSpanRatio = midCrossSpan / Math.max(1, boxW);
 
         if (res.digit === '8' && res.probs) {
           // Open left side indicates a 3 or crossed 7 (an 8 MUST have closed loops on left)
-          if (leftFrac < 0.22 && botRightInk >= 4 && (res.probs[3] >= 0.005 || res.probs[3] >= res.probs[7])) {
+          if (leftFrac < 0.18 && midLeftInk === 0 && botRightInk >= 4 && (res.probs[3] >= 0.04 || res.probs[3] >= res.probs[8] * 0.15)) {
             res.digit = '3';
             res.confidence = Math.max(0.92, res.probs[3] > 0.05 ? res.probs[3] : 0.90);
           } else if ((botLeftFrac < 0.18 && botInk >= 4) || (botLeftInk <= 1 && botInk >= 6)) {
@@ -1266,15 +1316,46 @@
             res.digit = '5';
             res.confidence = Math.max(0.92, res.probs[5] > 0.05 ? res.probs[5] : 0.90);
           }
+        } else if (res.digit === '3' && res.probs) {
+          // Closed loops on left indicate an 8 misclassified as 3:
+          // An 8 MUST have ink in the middle-left connecting/closing the loops (midLeftInk >= 2)
+          // or a low-confidence ambiguous prediction where 8 is a close runner-up and middle-left has ink
+          if (midLeftInk >= 2 && (res.probs[8] >= 0.10 || res.confidence < 0.60)) {
+            res.digit = '8';
+            res.confidence = Math.max(0.92, res.probs[8] > 0.05 ? res.probs[8] : 0.88);
+          } else if (res.confidence < 0.55 && res.probs[8] >= 0.25 && leftFrac >= 0.24 && topLeftInk >= 3 && botLeftInk >= 3 && midLeftInk >= 1) {
+            res.digit = '8';
+            res.confidence = Math.max(0.92, res.probs[8] > 0.05 ? res.probs[8] : 0.88);
+          }
         } else if (res.digit === '6' && res.probs) {
           // Top horizontal bar indicates a 5 (a 6 has a curved ascender curving left, empty top-right)
           if (topRightInk >= 3 && res.probs[5] >= 0.005) {
             res.digit = '5';
             res.confidence = Math.max(0.92, res.probs[5] > 0.05 ? res.probs[5] : 0.90);
           }
-        } else if ((res.digit === '2' || res.digit === '7') && res.probs) {
+        } else if (res.digit === '2' && res.probs) {
+          // A 2 MUST have a wide horizontal baseline at the bottom.
+          // If bottom is narrow vertical stem AND middle has wide crossbar, it is a 4!
+          if (botBaseSpanRatio < 0.35 && midCrossSpanRatio >= 0.45 && (res.probs[4] >= 0.02 || res.probs[4] > res.probs[2] * 0.05)) {
+            res.digit = '4';
+            res.confidence = Math.max(0.92, res.probs[4] > 0.05 ? res.probs[4] : 0.88);
+          } else if (botBaseSpanRatio < 0.30 && topRightInk >= 3 && (res.probs[7] >= 0.04 || res.probs[7] > res.probs[2] * 0.10)) {
+            res.digit = '7';
+            res.confidence = Math.max(0.92, res.probs[7] > 0.05 ? res.probs[7] : 0.88);
+          } else if (lTop >= 3 && rTop >= 3 && cTop <= 1 && botBaseSpanRatio < 0.40 && (res.probs[4] >= 0.01 || res.probs[4] > res.probs[2] * 0.10)) {
+            res.digit = '4';
+            res.confidence = Math.max(0.95, res.probs[4] > 0.05 ? res.probs[4] : 0.92);
+          }
+        } else if (res.digit === '4' && res.probs) {
+          // A 4 has vertical stem at bottom, NEVER a wide horizontal baseline across the bottom.
+          // If bottom has a wide horizontal base stroke, it is a 2!
+          if (botBaseSpanRatio >= 0.45 && botLeftInk >= 2 && (res.probs[2] >= 0.02 || res.probs[2] > res.probs[4] * 0.05)) {
+            res.digit = '2';
+            res.confidence = Math.max(0.92, res.probs[2] > 0.05 ? res.probs[2] : 0.88);
+          }
+        } else if (res.digit === '7' && res.probs) {
           // Open-top 4 with two distinct vertical stems at the top
-          if (lTop >= 3 && rTop >= 3 && cTop <= 2 && (res.probs[4] >= 0.005 || res.probs[4] > res.probs[2] * 0.10)) {
+          if (lTop >= 3 && rTop >= 3 && cTop <= 1 && botBaseSpanRatio < 0.40 && (res.probs[4] >= 0.005 || res.probs[4] > res.probs[7] * 0.10)) {
             res.digit = '4';
             res.confidence = Math.max(0.95, res.probs[4] > 0.05 ? res.probs[4] : 0.92);
           }
@@ -1457,6 +1538,7 @@
         status,
         isBlank: false,
         snippetCanvas,
+        probs: (tokens.length === 1 && lastDigitProbs) ? lastDigitProbs : null,
       };
     }
 
@@ -1513,13 +1595,14 @@
         let detectedTotal = null;
 
         for (const row of activeRows) {
-          const padTop = 1;
-          const padBottom = 1;
+          const padTop = 2;
+          const padBottom = 2;
+          const padX = 3;
           const cellCanvas = this.cropCanvas(
             rectified,
-            marksX[0] + 2,
+            marksX[0] + padX,
             row.y1 + padTop,
-            Math.max(10, marksX[1] - marksX[0] - 4),
+            Math.max(10, marksX[1] - marksX[0] - (padX * 2)),
             Math.max(10, row.y2 - row.y1 - (padTop + padBottom))
           );
 
@@ -1557,28 +1640,70 @@
             status: markRes.status,
             is_blank: markRes.isBlank,
             crop_base64: cellB64,
+            probs: markRes.probs || null,
           });
         }
 
-        // Reconcile if single low-confidence mark caused discrepancy with detected_total
+        // Reconcile if single or pair of ambiguous marks caused discrepancy with detectedTotal
         if (detectedTotal !== null && detectedTotal > 0 && Math.abs(calcSum - detectedTotal) > 0.01) {
-          const lowConfMarks = marksList.filter(
-            (m) => m.id !== 'total' && !m.is_blank && typeof m.verified_val === 'number' && m.confidence < 0.65
-          );
-          if (lowConfMarks.length === 1) {
-            const targetM = lowConfMarks[0];
-            const diff = detectedTotal - (calcSum - targetM.verified_val);
-            if (diff >= 0 && diff <= 10) {
-              targetM.detected_str = String(diff);
-              targetM.numeric_val = diff;
-              targetM.verified_val = diff;
-              targetM.confidence = 0.85;
-              targetM.status = 'Valid';
-              calcSum = marksList.reduce(
-                (acc, m) => (m.id !== 'total' && !m.is_blank && typeof m.verified_val === 'number' ? acc + m.verified_val : acc),
-                0
-              );
+          let reconciled = false;
+          // Step 1: Check if any single attempted question has an alternative candidate matching detectedTotal
+          for (const m of marksList) {
+            if (m.id === 'total' || m.is_blank || typeof m.verified_val !== 'number') continue;
+            const diff = detectedTotal - (calcSum - m.verified_val);
+            const candInt = Math.round(diff);
+            if (candInt >= 0 && candInt <= 10 && Math.abs(diff - candInt) < 0.01) {
+              const prob = (m.probs && m.probs[candInt] !== undefined) ? m.probs[candInt] : 0;
+              if (prob >= 0.03 || m.confidence < 0.65) {
+                m.detected_str = String(candInt);
+                m.numeric_val = candInt;
+                m.verified_val = candInt;
+                m.confidence = Math.max(0.90, prob > 0.05 ? prob : 0.88);
+                m.status = 'Valid';
+                reconciled = true;
+                break;
+              }
             }
+          }
+
+          // Step 2: If still not reconciled and 2 questions have alternative candidates (e.g. 2 vs 4 confusion)
+          if (!reconciled) {
+            const attempted = marksList.filter(m => m.id !== 'total' && !m.is_blank && typeof m.verified_val === 'number' && m.probs);
+            outerLoop: for (let i = 0; i < attempted.length; i++) {
+              for (let j = i + 1; j < attempted.length; j++) {
+                const m1 = attempted[i];
+                const m2 = attempted[j];
+                const baseSum = calcSum - m1.verified_val - m2.verified_val;
+                for (let c1 = 0; c1 <= 10; c1++) {
+                  if (m1.probs[c1] < 0.03 && c1 !== m1.verified_val) continue;
+                  const c2 = Math.round(detectedTotal - baseSum - c1);
+                  if (c2 >= 0 && c2 <= 10 && (m2.probs[c2] >= 0.03 || c2 === m2.verified_val)) {
+                    if (c1 !== m1.verified_val || c2 !== m2.verified_val) {
+                      m1.detected_str = String(c1);
+                      m1.numeric_val = c1;
+                      m1.verified_val = c1;
+                      m1.confidence = Math.max(0.90, m1.probs[c1] > 0.05 ? m1.probs[c1] : 0.88);
+                      m1.status = 'Valid';
+
+                      m2.detected_str = String(c2);
+                      m2.numeric_val = c2;
+                      m2.verified_val = c2;
+                      m2.confidence = Math.max(0.90, m2.probs[c2] > 0.05 ? m2.probs[c2] : 0.88);
+                      m2.status = 'Valid';
+                      reconciled = true;
+                      break outerLoop;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if (reconciled) {
+            calcSum = marksList.reduce(
+              (acc, m) => (m.id !== 'total' && !m.is_blank && typeof m.verified_val === 'number' ? acc + m.verified_val : acc),
+              0
+            );
           }
         }
 

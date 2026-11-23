@@ -465,16 +465,39 @@ class DigitRecognizer:
 
             top_y = int(orig_h * 0.35)
             top_right_ink = float(np.sum(char_crop[:top_y, mid_x:] > 0))
+            top_left_ink = float(np.sum(char_crop[:top_y, :mid_x] > 0))
             mid_y1, mid_y2 = int(orig_h * 0.30), int(orig_h * 0.55)
             mid_right_ink = float(np.sum(char_crop[mid_y1:mid_y2, mid_x:] > 0))
+            mid_left_x = int(orig_w * 0.30)
+            mid_left_ink = float(np.sum(char_crop[mid_y1:mid_y2, :mid_left_x] > 0))
 
             l_top = float(np.sum(char_crop[:top_y, :mid_x] > 0))
             r_top = float(np.sum(char_crop[:top_y, mid_x:] > 0))
             c_top = float(np.sum(char_crop[:top_y, max(0, mid_x - 1) : min(orig_w, mid_x + 2)] > 0))
 
+            # Bottom baseline span (bottom 22% of height)
+            bot_base_y = int(orig_h * 0.78)
+            bot_base_rows = char_crop[bot_base_y:, :] > 0
+            if np.any(bot_base_rows):
+                bot_cols = np.where(bot_base_rows)[1]
+                bot_base_span = float(np.max(bot_cols) - np.min(bot_cols) + 1)
+            else:
+                bot_base_span = 0.0
+            bot_base_span_ratio = bot_base_span / max(1.0, float(orig_w))
+
+            # Middle crossbar span (40% to 70% of height)
+            mid_cross_y1, mid_cross_y2 = int(orig_h * 0.40), int(orig_h * 0.70)
+            mid_cross_rows = char_crop[mid_cross_y1:mid_cross_y2, :] > 0
+            if np.any(mid_cross_rows):
+                mid_cols = np.where(mid_cross_rows)[1]
+                mid_cross_span = float(np.max(mid_cols) - np.min(mid_cols) + 1)
+            else:
+                mid_cross_span = 0.0
+            mid_cross_span_ratio = mid_cross_span / max(1.0, float(orig_w))
+
             if best_digit == "8":
                 # Open left side indicates a 3 or crossed 7 (an 8 MUST have closed loops on left)
-                if left_frac < 0.22 and bot_right_ink >= 4 and (probs[3] >= 0.005 or probs[3] >= probs[7]):
+                if left_frac < 0.18 and mid_left_ink == 0 and bot_right_ink >= 4 and (probs[3] >= 0.04 or probs[3] >= probs[8] * 0.15):
                     best_digit = "3"
                     best_score = max(0.92, float(probs[3]) if probs[3] > 0.05 else 0.90)
                 elif (bot_left_frac < 0.18 and bot_ink >= 4) or (bot_left_ink <= 1 and bot_ink >= 6):
@@ -484,15 +507,46 @@ class DigitRecognizer:
                     best_digit = "5"
                     best_score = max(0.92, float(probs[5]) if probs[5] > 0.05 else 0.90)
 
+            elif best_digit == "3":
+                # Closed loops on left indicate an 8 misclassified as 3:
+                # An 8 MUST have ink in the middle-left connecting/closing the loops (mid_left_ink >= 2)
+                # or a low-confidence ambiguous prediction where 8 is a close runner-up and middle-left has ink
+                if mid_left_ink >= 2 and (probs[8] >= 0.10 or best_score < 0.60):
+                    best_digit = "8"
+                    best_score = max(0.92, float(probs[8]) if probs[8] > 0.05 else 0.88)
+                elif best_score < 0.55 and probs[8] >= 0.25 and left_frac >= 0.24 and top_left_ink >= 3 and bot_left_ink >= 3 and mid_left_ink >= 1:
+                    best_digit = "8"
+                    best_score = max(0.92, float(probs[8]) if probs[8] > 0.05 else 0.88)
+
             elif best_digit == "6":
                 # Top horizontal bar indicates a 5 (a 6 has a curved ascender curving left, empty top-right)
                 if top_right_ink >= 3 and probs[5] >= 0.005:
                     best_digit = "5"
                     best_score = max(0.92, float(probs[5]) if probs[5] > 0.05 else 0.90)
 
-            elif best_digit in ("2", "7"):
+            elif best_digit == "2":
+                # A 2 MUST have a wide horizontal baseline at the bottom.
+                # If bottom is narrow vertical stem AND middle has wide crossbar, it is a 4!
+                if bot_base_span_ratio < 0.35 and mid_cross_span_ratio >= 0.45 and (probs[4] >= 0.02 or probs[4] > probs[2] * 0.05):
+                    best_digit = "4"
+                    best_score = max(0.92, float(probs[4]) if probs[4] > 0.05 else 0.88)
+                elif bot_base_span_ratio < 0.30 and top_right_ink >= 3 and (probs[7] >= 0.04 or probs[7] > probs[2] * 0.10):
+                    best_digit = "7"
+                    best_score = max(0.92, float(probs[7]) if probs[7] > 0.05 else 0.88)
+                elif l_top >= 3 and r_top >= 3 and c_top <= 1 and bot_base_span_ratio < 0.40 and (probs[4] >= 0.01 or probs[4] > probs[2] * 0.10):
+                    best_digit = "4"
+                    best_score = max(0.95, float(probs[4]) if probs[4] > 0.05 else 0.92)
+
+            elif best_digit == "4":
+                # A 4 has vertical stem at bottom, NEVER a wide horizontal baseline across the bottom.
+                # If bottom has a wide horizontal base stroke, it is a 2!
+                if bot_base_span_ratio >= 0.45 and bot_left_ink >= 2 and (probs[2] >= 0.02 or probs[2] > probs[4] * 0.05):
+                    best_digit = "2"
+                    best_score = max(0.92, float(probs[2]) if probs[2] > 0.05 else 0.88)
+
+            elif best_digit == "7":
                 # Open-top 4 with two distinct vertical stems at the top
-                if l_top >= 3 and r_top >= 3 and c_top <= 2 and (probs[4] >= 0.005 or probs[4] > probs[2] * 0.10):
+                if l_top >= 3 and r_top >= 3 and c_top <= 1 and bot_base_span_ratio < 0.40 and (probs[4] >= 0.005 or probs[4] > probs[7] * 0.10):
                     best_digit = "4"
                     best_score = max(0.95, float(probs[4]) if probs[4] > 0.05 else 0.92)
 

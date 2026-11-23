@@ -220,6 +220,18 @@ class EvalSheetExtractor:
         else:
             stroke = th.copy()
 
+        # Strip horizontal grid lines at top (y <= 3) and bottom (y >= ih - 4)
+        for y in range(ih):
+            if y <= 3 or y >= ih - 4:
+                if np.count_nonzero(stroke[y, :] > 0) >= min(18, int(iw * 0.35)):
+                    stroke[y, :] = 0
+
+        # Strip vertical grid lines at left (x <= 3) and right (x >= iw - 4)
+        for x in range(iw):
+            if x <= 3 or x >= iw - 4:
+                if np.count_nonzero(stroke[:, x] > 0) >= min(15, int(ih * 0.40)):
+                    stroke[:, x] = 0
+
         # Eliminate border lines and artifacts via connected components
         num_l, labels, stats, _ = cv2.connectedComponentsWithStats(stroke)
         for l in range(1, num_l):
