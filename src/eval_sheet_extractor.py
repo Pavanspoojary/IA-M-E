@@ -679,11 +679,11 @@ class EvalSheetExtractor:
                         ia_marks.append({
                             "id": q_id,
                             "label": q_lbl,
-                            "detected_str": "",
+                            "detected_str": "NA",
                             "numeric_val": None,
-                            "verified_val": 0.0,
-                            "confidence": 1.0,
-                            "status": "Blank",
+                            "verified_val": "NA",
+                            "confidence": None,
+                            "status": "NA",
                             "is_blank": True,
                             "crop_base64": self._encode_base64(box_crop),
                         })
@@ -694,16 +694,18 @@ class EvalSheetExtractor:
                             max_marks=100.0,
                             allow_decimal=(q_id != "total")
                         )
-                        if res.value_str == "-" or (res.value_str is None and res.confidence >= 0.80):
-                            det_str = "-"
-                            num_val = 0.0
-                            ver_val = 0.0
-                            status_text = "Valid"
+                        if res.value_str in ("-", "NA") or (res.value_str is None and res.confidence >= 0.80):
+                            det_str = "NA"
+                            num_val = None
+                            ver_val = "NA"
+                            status_text = "NA"
+                            is_cell_blank = True
                         else:
                             det_str = res.value_str or ""
                             num_val = res.numeric_value
-                            ver_val = num_val if num_val is not None else 0.0
+                            ver_val = num_val if num_val is not None else "NA"
                             status_text = "Valid" if res.confidence >= 0.65 and not res.is_ambiguous else "Needs review"
+                            is_cell_blank = False
 
                         ia_marks.append({
                             "id": q_id,
@@ -711,9 +713,9 @@ class EvalSheetExtractor:
                             "detected_str": det_str,
                             "numeric_val": num_val,
                             "verified_val": ver_val,
-                            "confidence": round(res.confidence, 3),
+                            "confidence": round(res.confidence, 3) if not is_cell_blank else None,
                             "status": status_text,
-                            "is_blank": False,
+                            "is_blank": is_cell_blank,
                             "crop_base64": self._encode_base64(box_crop),
                         })
 
@@ -724,14 +726,22 @@ class EvalSheetExtractor:
         for ia_name, marks in results_by_ia.items():
             calc_sum = sum(
                 m["verified_val"] for m in marks
-                if m["id"] != "total" and m["verified_val"] is not None and not m["is_blank"]
+                if m["id"] != "total" and isinstance(m.get("verified_val"), (int, float)) and not m.get("is_blank")
             )
             detected_tot_mark = next((m for m in marks if m["id"] == "total"), None)
-            detected_val = detected_tot_mark["numeric_val"] if detected_tot_mark else None
+            detected_val = detected_tot_mark["numeric_val"] if detected_tot_mark and isinstance(detected_tot_mark.get("numeric_val"), (int, float)) else None
+
+            # Auto-populate verified total if left blank on paper but questions have marks
+            if detected_tot_mark and (detected_tot_mark.get("is_blank") or detected_val is None):
+                if calc_sum > 0:
+                    detected_tot_mark["verified_val"] = round(calc_sum, 1)
 
             # Reconcile if single low-confidence mark caused discrepancy with detected_total
             if detected_val is not None and detected_val > 0 and abs(calc_sum - detected_val) > 0.01:
-                low_conf_marks = [m for m in marks if m["id"] != "total" and not m["is_blank"] and m["confidence"] < 0.65]
+                low_conf_marks = [
+                    m for m in marks
+                    if m["id"] != "total" and not m.get("is_blank") and isinstance(m.get("verified_val"), (int, float)) and m.get("confidence") is not None and m["confidence"] < 0.65
+                ]
                 if len(low_conf_marks) == 1:
                     target_m = low_conf_marks[0]
                     diff = detected_val - (calc_sum - target_m["verified_val"])
@@ -743,13 +753,15 @@ class EvalSheetExtractor:
                         target_m["status"] = "Valid"
                         calc_sum = sum(
                             m["verified_val"] for m in marks
-                            if m["id"] != "total" and m["verified_val"] is not None and not m["is_blank"]
+                            if m["id"] != "total" and isinstance(m.get("verified_val"), (int, float)) and not m.get("is_blank")
                         )
 
+            has_marks = any(m["id"] != "total" and isinstance(m.get("verified_val"), (int, float)) and not m.get("is_blank") for m in marks)
             summary_totals[ia_name] = {
-                "calculated_sum": round(calc_sum, 1),
-                "detected_total": detected_val,
-                "matches": detected_val is not None and abs(calc_sum - detected_val) < 0.01,
+                "calculated_sum": round(calc_sum, 1) if has_marks else "NA",
+                "detected_total": detected_val if detected_val is not None else "NA",
+                "is_blank": not has_marks and detected_val is None,
+                "matches": (not has_marks and detected_val is None) or (detected_val is not None and abs(calc_sum - detected_val) < 0.01),
             }
 
         sheet_payload = {
@@ -903,7 +915,7 @@ class EvalSheetExtractor:
                     m_obj = m_map.get(k1) or m_map.get(k2)
                     v_str = self._format_mark_display(m_obj)
                     q_vals.append(v_str)
-                    if v_str not in ("-", ""):
+                    if v_str not in ("NA", "-", ""):
                         all_blank = False
                         try:
                             calc_sum += float(v_str)
@@ -914,21 +926,28 @@ class EvalSheetExtractor:
                 tot_m = m_map.get("total")
                 tot_val = self._format_mark_display(tot_m)
                 det_total = summary.get("detected_total")
-                if det_total is None and tot_val not in ("-", ""):
+                if (det_total is None or det_total == "NA") and tot_val not in ("NA", "-", ""):
                     try:
                         det_total = float(tot_val)
                     except ValueError:
                         det_total = None
 
                 calc_str = self._format_number_val(calc_sum)
-                final_total = tot_val if tot_val not in ("-", "") else (calc_str if not all_blank else "-")
+                final_total = tot_val if tot_val not in ("NA", "-", "") else (calc_str if not all_blank else "NA")
 
-                if det_total is not None and det_total > 0 and abs(calc_sum - det_total) < 0.01:
+                num_det = None
+                if det_total is not None and det_total != "NA":
+                    try:
+                        num_det = float(det_total)
+                    except (ValueError, TypeError):
+                        num_det = None
+
+                if num_det is not None and num_det > 0 and abs(calc_sum - num_det) < 0.01:
                     row_status = "Valid"
-                elif det_total is not None and det_total > 0:
+                elif num_det is not None and num_det > 0:
                     row_status = "Discrepancy"
                 elif all_blank:
-                    row_status = "Blank"
+                    row_status = "NA"
                 else:
                     row_status = "Valid"
 
@@ -946,7 +965,7 @@ class EvalSheetExtractor:
                         cell.font = bold_font
                         cell.fill = total_fill
                     elif 3 <= col_idx < len(row_vals) - 1:
-                        if cell.value == "-":
+                        if cell.value in ("-", "NA"):
                             cell.font = dim_font
                         else:
                             cell.font = regular_font
@@ -1022,29 +1041,39 @@ class EvalSheetExtractor:
         """Check if question was unattempted / dash / blank."""
         if not m:
             return True
-        if m.get("is_blank", False) or m.get("status") == "Blank":
+        if m.get("is_blank", False) or m.get("status") in ("Blank", "NA"):
             return True
-        det = str(m.get("detected_str", "")).strip()
-        return det in ("-", "—", "–", "")
+        det = str(m.get("detected_str", "")).strip().upper()
+        if det in ("-", "—", "–", "", "NA"):
+            return True
+        v = m.get("verified_val")
+        if v in ("NA", None) and (m.get("numeric_val") is None or m.get("numeric_val") == 0):
+            return True
+        return False
 
     @classmethod
     def _format_mark_display(cls, m: Optional[Dict[str, Any]]) -> str:
-        """Format mark for table/CSV cell: '-' for unattempted, clean number for attempted."""
+        """Format mark for table/CSV cell: 'NA' for unattempted, clean number for attempted."""
         if not m:
-            return "-"
+            return "NA"
         if cls._is_mark_unattempted(m):
             v = m.get("verified_val")
-            if v is not None and v > 0:
-                return cls._format_number_val(v)
-            return "-"
+            if v is not None and v != "NA":
+                try:
+                    num_v = float(v)
+                    if num_v > 0:
+                        return cls._format_number_val(num_v)
+                except (ValueError, TypeError):
+                    pass
+            return "NA"
         v = m.get("verified_val")
-        if v is not None:
+        if v is not None and v != "NA":
             return cls._format_number_val(v)
         v = m.get("numeric_val")
         if v is not None:
             return cls._format_number_val(v)
         det = str(m.get("detected_str", "")).strip()
-        return "-" if det in ("", "-") else det
+        return "NA" if det in ("", "-", "NA") else det
 
     @classmethod
     def _get_question_columns(cls, sheets: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
@@ -1129,7 +1158,7 @@ class EvalSheetExtractor:
                     m_obj = m_map.get(k1) or m_map.get(k2)
                     v_str = self._format_mark_display(m_obj)
                     q_vals.append(v_str)
-                    if v_str not in ("-", ""):
+                    if v_str not in ("NA", "-", ""):
                         all_blank = False
                         try:
                             calc_sum += float(v_str)
@@ -1141,24 +1170,33 @@ class EvalSheetExtractor:
 
                 summary = sheet.get("summary_totals", {}).get(ia_name, {})
                 det_total = summary.get("detected_total")
-                if det_total is None and tot_val not in ("-", ""):
+                if (det_total is None or det_total == "NA") and tot_val not in ("NA", "-", ""):
                     try:
                         det_total = float(tot_val)
                     except ValueError:
                         det_total = None
 
                 calc_str = self._format_number_val(calc_sum)
-                final_total = tot_val if tot_val not in ("-", "") else (calc_str if not all_blank else "-")
+                final_total = tot_val if tot_val not in ("NA", "-", "") else (calc_str if not all_blank else "NA")
 
-                if det_total is not None and det_total > 0 and abs(calc_sum - det_total) < 0.01:
+                num_det = None
+                if det_total is not None and det_total != "NA":
+                    try:
+                        num_det = float(det_total)
+                    except (ValueError, TypeError):
+                        num_det = None
+
+                if num_det is not None and num_det > 0 and abs(calc_sum - num_det) < 0.01:
                     row_status = "Valid"
-                elif det_total is not None and det_total > 0:
+                elif num_det is not None and num_det > 0:
                     row_status = "Discrepancy"
                 elif all_blank:
-                    row_status = "Blank"
+                    row_status = "NA"
                 else:
                     row_status = "Valid"
 
                 writer.writerow([sheet_label, ia_name] + q_vals + [final_total, row_status])
+
+        return out.getvalue()
 
         return out.getvalue()

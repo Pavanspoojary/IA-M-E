@@ -514,10 +514,12 @@
         cv.morphologyEx(bw, hLines, cv.MORPH_OPEN, hKernel);
 
         const hProj = new Float32Array(H);
+        const xMin = Math.round(W * 0.05);
+        const xMax = Math.round(W * 0.95);
         for (let y = 0; y < H; y++) {
           let sum = 0;
           const rowStart = y * W;
-          for (let x = 50; x < 150 && x < W; x++) {
+          for (let x = xMin; x < xMax && x < W; x++) {
             if (hLines.data[rowStart + x] > 0) sum++;
           }
           hProj[y] = sum;
@@ -534,7 +536,7 @@
         }
         let yEnd = 709;
         let maxE = -1;
-        for (let y = 690; y <= 725 && y < H; y++) {
+        for (let y = 680; y <= 725 && y < H; y++) {
           if (hProj[y] > maxE) {
             maxE = hProj[y];
             yEnd = y;
@@ -543,6 +545,7 @@
         const avgRowH = (yEnd - yStart) / 13.0;
 
         const rowPeaks = [yStart];
+        const peakThreshold = Math.max(25, (xMax - xMin) * 0.08);
         for (let k = 1; k < 13; k++) {
           const expY = Math.round(yStart + k * avgRowH);
           const wLow = Math.max(0, expY - 10);
@@ -555,7 +558,7 @@
               bestY = y;
             }
           }
-          rowPeaks.push(maxP > 20 ? bestY : expY);
+          rowPeaks.push(maxP > peakThreshold ? bestY : expY);
         }
         rowPeaks.push(yEnd);
 
@@ -1179,10 +1182,10 @@
 
       if (cellInfo.isBlank) {
         return {
-          detectedStr: '-',
-          numericVal: 0.0,
-          confidence: 1.0,
-          status: 'Blank',
+          detectedStr: 'NA',
+          numericVal: null,
+          confidence: null,
+          status: 'NA',
           isBlank: true,
           snippetCanvas: cellCanvas,
         };
@@ -1190,11 +1193,12 @@
 
       if (cellInfo.isStrikeout) {
         return {
-          detectedStr: '-',
-          numericVal: 0.0,
-          confidence: 0.95,
-          status: 'Valid',
-          isBlank: false,
+          detectedStr: 'NA',
+          numericVal: null,
+          confidence: null,
+          status: 'NA',
+          isBlank: true,
+          isStrikeout: true,
           snippetCanvas: cellCanvas,
         };
       }
@@ -1278,6 +1282,17 @@
 
         tokens.push(res.digit);
         totalConf += res.confidence;
+      }
+
+      if (tokens.length === 0) {
+        return {
+          detectedStr: 'NA',
+          numericVal: null,
+          confidence: null,
+          status: 'NA',
+          isBlank: true,
+          snippetCanvas: cellCanvas,
+        };
       }
 
       let valStr = tokens.join('');
@@ -1511,10 +1526,25 @@
           const markRes = await this.recognizeCell(cellCanvas, row.max, row, calcSum);
           const cellB64 = (markRes.snippetCanvas || cellCanvas).toDataURL('image/png');
 
+          let verifiedVal = 'NA';
           if (row.id === 'total') {
-            detectedTotal = markRes.isBlank ? null : markRes.numericVal;
-          } else if (!markRes.isBlank && markRes.numericVal > 0) {
-            calcSum += markRes.numericVal;
+            if (!markRes.isBlank && markRes.numericVal !== null && markRes.numericVal > 0) {
+              detectedTotal = markRes.numericVal;
+              verifiedVal = markRes.numericVal;
+            } else if (calcSum > 0) {
+              detectedTotal = null;
+              verifiedVal = Math.round(calcSum * 10) / 10;
+            } else {
+              detectedTotal = null;
+              verifiedVal = 'NA';
+            }
+          } else {
+            if (!markRes.isBlank && markRes.numericVal !== null) {
+              verifiedVal = markRes.numericVal;
+              calcSum += markRes.numericVal;
+            } else {
+              verifiedVal = 'NA';
+            }
           }
 
           marksList.push({
@@ -1522,8 +1552,8 @@
             label: row.label,
             detected_str: markRes.detectedStr,
             numeric_val: markRes.numericVal,
-            verified_val: markRes.numericVal,
-            confidence: markRes.confidence,
+            verified_val: verifiedVal,
+            confidence: markRes.isBlank ? null : markRes.confidence,
             status: markRes.status,
             is_blank: markRes.isBlank,
             crop_base64: cellB64,
@@ -1533,7 +1563,7 @@
         // Reconcile if single low-confidence mark caused discrepancy with detected_total
         if (detectedTotal !== null && detectedTotal > 0 && Math.abs(calcSum - detectedTotal) > 0.01) {
           const lowConfMarks = marksList.filter(
-            (m) => m.id !== 'total' && !m.is_blank && m.confidence < 0.65
+            (m) => m.id !== 'total' && !m.is_blank && typeof m.verified_val === 'number' && m.confidence < 0.65
           );
           if (lowConfMarks.length === 1) {
             const targetM = lowConfMarks[0];
@@ -1545,19 +1575,23 @@
               targetM.confidence = 0.85;
               targetM.status = 'Valid';
               calcSum = marksList.reduce(
-                (acc, m) => (m.id !== 'total' && !m.is_blank ? acc + (m.verified_val || 0) : acc),
+                (acc, m) => (m.id !== 'total' && !m.is_blank && typeof m.verified_val === 'number' ? acc + m.verified_val : acc),
                 0
               );
             }
           }
         }
 
+        const hasAnyMarks = marksList.some(m => m.id !== 'total' && !m.is_blank && m.verified_val !== 'NA');
+        const roundedSum = Math.round(calcSum * 10) / 10;
         resultsByIA[iaName] = marksList;
         summaryTotals[iaName] = {
-          calculated_sum: Math.round(calcSum * 10) / 10,
-          detected_total: detectedTotal,
-          matches:
-            detectedTotal !== null && Math.abs(calcSum - detectedTotal) < 0.01,
+          calculated_sum: hasAnyMarks ? roundedSum : 'NA',
+          detected_total: detectedTotal !== null ? detectedTotal : 'NA',
+          is_blank: !hasAnyMarks && detectedTotal === null,
+          matches: !hasAnyMarks
+            ? (detectedTotal === null)
+            : (detectedTotal !== null && Math.abs(calcSum - detectedTotal) < 0.01),
         };
       }
 
@@ -1708,37 +1742,43 @@
 
           qColumns.forEach((col) => {
             const m = markMap[normKey(col.id)] || markMap[normKey(col.label)];
-            if (!m || m.is_blank || m.status === 'Blank') {
-              rowVals.push('-');
-            } else if (m.detected_str === '-' && (m.verified_val === 0 || m.verified_val === null)) {
-              rowVals.push('-');
-            } else if (m.verified_val !== null && m.verified_val !== undefined) {
+            if (!m || m.is_blank || m.status === 'NA' || m.status === 'Blank') {
+              rowVals.push('NA');
+            } else if (m.verified_val === 'NA' || m.detected_str === 'NA') {
+              rowVals.push('NA');
+            } else if (m.verified_val !== null && m.verified_val !== undefined && m.verified_val !== '') {
               rowVals.push(String(m.verified_val));
               allBlank = false;
             } else if (m.numeric_val !== null && m.numeric_val !== undefined) {
               rowVals.push(String(m.numeric_val));
               allBlank = false;
             } else {
-              rowVals.push('-');
+              rowVals.push('NA');
             }
           });
 
           const summary = (s.summary_totals && s.summary_totals[ia]) || {};
           const totMark = marksList.find((m) => normKey(m.id) === 'total' || normKey(m.label).includes('total'));
-          const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
-          const detTotal = (totMark && totMark.verified_val !== null && totMark.verified_val !== undefined)
+          const calcSum = (summary.calculated_sum !== undefined && summary.calculated_sum !== 'NA') ? Number(summary.calculated_sum) : 0;
+          const detTotal = (totMark && totMark.verified_val !== null && totMark.verified_val !== undefined && totMark.verified_val !== 'NA')
             ? Number(totMark.verified_val)
-            : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? Number(summary.detected_total) : null);
+            : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total !== 'NA' && Number(summary.detected_total) > 0 ? Number(summary.detected_total) : null);
 
-          const finalTotal = (detTotal !== null && detTotal > 0) ? detTotal : (calcSum > 0 ? calcSum : (allBlank ? '-' : 0));
-          rowVals.push(String(finalTotal));
+          let finalTotal = 'NA';
+          let status = 'NA';
 
-          let status = 'Valid';
-          if (detTotal !== null && detTotal > 0 && Math.abs(calcSum - detTotal) > 0.01) {
-            status = 'Discrepancy';
-          } else if (allBlank) {
-            status = 'Blank';
+          if (allBlank && detTotal === null) {
+            finalTotal = 'NA';
+            status = 'NA';
+          } else {
+            finalTotal = (detTotal !== null && detTotal > 0) ? String(detTotal) : (calcSum > 0 ? String(calcSum) : '0');
+            if (detTotal !== null && detTotal > 0 && Math.abs(calcSum - detTotal) > 0.01) {
+              status = 'Discrepancy';
+            } else {
+              status = 'Valid';
+            }
           }
+          rowVals.push(finalTotal);
           rowVals.push(status);
 
           lines.push(rowVals.map(toCsvField).join(','));
@@ -1825,37 +1865,44 @@
 
           qColumns.forEach((col) => {
             const m = markMap[normKey(col.id)] || markMap[normKey(col.label)];
-            if (!m || m.is_blank || m.status === 'Blank') {
-              row.push('-');
-            } else if (m.detected_str === '-' && (m.verified_val === 0 || m.verified_val === null)) {
-              row.push('-');
-            } else if (m.verified_val !== null && m.verified_val !== undefined) {
+            if (!m || m.is_blank || m.status === 'NA' || m.status === 'Blank') {
+              row.push('NA');
+            } else if (m.verified_val === 'NA' || m.detected_str === 'NA') {
+              row.push('NA');
+            } else if (m.verified_val !== null && m.verified_val !== undefined && m.verified_val !== '') {
               row.push(Number(m.verified_val));
               allBlank = false;
             } else if (m.numeric_val !== null && m.numeric_val !== undefined) {
               row.push(Number(m.numeric_val));
               allBlank = false;
             } else {
-              row.push('-');
+              row.push('NA');
             }
           });
 
           const summary = (s.summary_totals && s.summary_totals[ia]) || {};
           const totMark = marksList.find((m) => normKey(m.id) === 'total' || normKey(m.label).includes('total'));
-          const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
-          const detTotal = (totMark && totMark.verified_val !== null && totMark.verified_val !== undefined)
+          const calcSum = (summary.calculated_sum !== undefined && summary.calculated_sum !== 'NA') ? Number(summary.calculated_sum) : 0;
+          const detTotal = (totMark && totMark.verified_val !== null && totMark.verified_val !== undefined && totMark.verified_val !== 'NA')
             ? Number(totMark.verified_val)
-            : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? Number(summary.detected_total) : null);
+            : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total !== 'NA' && Number(summary.detected_total) > 0 ? Number(summary.detected_total) : null);
 
-          const finalTotal = (detTotal !== null && detTotal > 0) ? detTotal : (calcSum > 0 ? calcSum : (allBlank ? '-' : 0));
-          row.push(typeof finalTotal === 'number' ? finalTotal : String(finalTotal));
+          let finalTotal = 'NA';
+          let status = 'NA';
 
-          let status = 'Valid';
-          if (detTotal !== null && detTotal > 0 && Math.abs(calcSum - detTotal) > 0.01) {
-            status = 'Discrepancy';
-          } else if (allBlank) {
-            status = 'Blank';
+          if (allBlank && detTotal === null) {
+            finalTotal = 'NA';
+            status = 'NA';
+          } else {
+            const numTot = (detTotal !== null && detTotal > 0) ? detTotal : (calcSum > 0 ? calcSum : 0);
+            finalTotal = numTot;
+            if (detTotal !== null && detTotal > 0 && Math.abs(calcSum - detTotal) > 0.01) {
+              status = 'Discrepancy';
+            } else {
+              status = 'Valid';
+            }
           }
+          row.push(finalTotal);
           row.push(status);
 
           dataRows.push(row);
@@ -1905,6 +1952,9 @@
               alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
               border: thinBorder,
             };
+            if (cell.value === 'NA') {
+              cell.s.font = { name: 'Segoe UI', sz: 10, color: { rgb: '94A3B8' } };
+            }
             if (isTotalCol) {
               cell.s.fill = { fgColor: { rgb: 'F1F5F9' } };
             }

@@ -212,14 +212,17 @@
 
   // Render Status Badge
   function getBadgeHTML(status) {
-    const s = String(status).toLowerCase();
-    if (s.includes('blank')) {
-      return '<span class="badge badge-blank">Blank</span>';
+    const s = String(status || '').toLowerCase();
+    if (s === 'na' || s.includes('blank')) {
+      return '<span class="badge badge-blank">NA</span>';
     }
     if (s.includes('valid')) {
       return '<span class="badge badge-valid">Valid</span>';
     }
-    if (s.includes('review')) {
+    if (s.includes('calc')) {
+      return '<span class="badge badge-valid" style="background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe;">Calculated</span>';
+    }
+    if (s.includes('review') || s.includes('discrepancy')) {
       return '<span class="badge badge-review">Needs Review</span>';
     }
     if (s.includes('correct')) {
@@ -235,54 +238,118 @@
     const sheet = currentExtractionData.sheets[currentSheetIndex];
     const iaKeys = Object.keys(sheet.results_by_ia);
     const isMultiIA = iaKeys.length > 1;
+    const scoreBar = document.querySelector('.score-summary-bar');
 
-    let totalSum = 0;
-    let totalDetectedSum = 0;
-    let anyDetectedTotal = false;
+    if (!isMultiIA) {
+      const iaName = iaKeys[0] || 'IA 1';
+      const marksList = sheet.results_by_ia[iaName] || [];
+      let calcSum = 0;
+      let hasMarks = false;
+      let detTotal = null;
 
-    iaKeys.forEach((iaName) => {
-      const marksList = sheet.results_by_ia[iaName];
       marksList.forEach((m) => {
         if (m.id === 'total') {
-          if (m.numeric_val !== null && !isNaN(m.numeric_val)) {
-            totalDetectedSum += Number(m.numeric_val);
-            anyDetectedTotal = true;
+          if (m.verified_val !== 'NA' && m.verified_val !== null && !isNaN(m.verified_val)) {
+            detTotal = Number(m.verified_val);
+          } else if (m.numeric_val !== null && !isNaN(m.numeric_val)) {
+            detTotal = Number(m.numeric_val);
           }
-        } else if (m.verified_val !== null && !isNaN(m.verified_val)) {
-          totalSum += Number(m.verified_val);
+        } else if (m.verified_val !== 'NA' && m.verified_val !== null && !isNaN(m.verified_val)) {
+          calcSum += Number(m.verified_val);
+          hasMarks = true;
         }
       });
-    });
 
-    displayCalculatedTotal.textContent = isMultiIA
-      ? `${totalSum.toFixed(1)} (All IA)`
-      : totalSum.toFixed(1);
+      if (scoreBar) {
+        let badgeText = 'Verified Match';
+        let badgeStyle = '';
 
-    if (anyDetectedTotal) {
-      displayDetectedTotal.textContent = isMultiIA
-        ? `${totalDetectedSum.toFixed(1)} (All IA)`
-        : totalDetectedSum.toFixed(1);
+        if (!hasMarks && detTotal === null) {
+          badgeText = 'NA (Blank)';
+          badgeStyle = 'background:#f1f5f9; color:#64748b; border:1px solid #cbd5e1;';
+        } else if (detTotal !== null && Math.abs(calcSum - detTotal) < 0.01) {
+          badgeText = 'Verified Match';
+          badgeStyle = 'background:var(--success-bg); color:var(--success-text); border:1px solid var(--success-border);';
+        } else if (detTotal !== null) {
+          badgeText = 'Discrepancy Detected';
+          badgeStyle = 'background:var(--danger-bg); color:var(--danger-text); border:1px solid var(--danger-border);';
+        } else {
+          badgeText = 'Evaluation Ready';
+        }
 
-      if (Math.abs(totalSum - totalDetectedSum) < 0.01) {
-        matchBadge.textContent = 'Verified Match';
-        matchBadge.className = 'score-badge';
-        matchBadge.style.background = '';
-        matchBadge.style.color = '';
-        matchBadge.style.borderColor = '';
-      } else {
-        matchBadge.textContent = 'Discrepancy Detected';
-        matchBadge.className = 'score-badge';
-        matchBadge.style.background = 'var(--danger-bg)';
-        matchBadge.style.color = 'var(--danger-text)';
-        matchBadge.style.borderColor = 'var(--danger-border)';
+        scoreBar.innerHTML = `
+          <div class="score-item">
+            <span class="score-lbl">Calculated Score</span>
+            <span class="score-val" id="displayCalculatedTotal">${hasMarks ? calcSum.toFixed(1) : 'NA'}</span>
+          </div>
+          <div class="score-item">
+            <span class="score-lbl">Sheet Detected Total</span>
+            <span class="score-val" id="displayDetectedTotal">${detTotal !== null ? detTotal.toFixed(1) : 'NA'}</span>
+          </div>
+          <div>
+            <span id="matchBadge" class="score-badge" style="${badgeStyle}">${badgeText}</span>
+          </div>
+        `;
       }
-    } else {
-      displayDetectedTotal.textContent = '-';
-      matchBadge.textContent = 'Evaluation Ready';
-      matchBadge.className = 'score-badge';
-      matchBadge.style.background = '';
-      matchBadge.style.color = '';
-      matchBadge.style.borderColor = '';
+      return;
+    }
+
+    // Multi-IA: Render individual breakdown cards per IA!
+    if (scoreBar) {
+      let cardsHtml = '';
+      iaKeys.forEach((iaName) => {
+        const marksList = sheet.results_by_ia[iaName] || [];
+        let calcSum = 0;
+        let hasMarks = false;
+        let detTotal = null;
+
+        marksList.forEach((m) => {
+          if (m.id === 'total') {
+            if (m.verified_val !== 'NA' && m.verified_val !== null && !isNaN(m.verified_val)) {
+              detTotal = Number(m.verified_val);
+            } else if (m.numeric_val !== null && !isNaN(m.numeric_val)) {
+              detTotal = Number(m.numeric_val);
+            }
+          } else if (m.verified_val !== 'NA' && m.verified_val !== null && !isNaN(m.verified_val)) {
+            calcSum += Number(m.verified_val);
+            hasMarks = true;
+          }
+        });
+
+        let badgeText = 'Verified Match';
+        let badgeStyle = 'background:var(--success-bg); color:var(--success-text); border:1px solid var(--success-border);';
+
+        if (!hasMarks && detTotal === null) {
+          badgeText = 'NA (Blank)';
+          badgeStyle = 'background:#f1f5f9; color:#64748b; border:1px solid #cbd5e1;';
+        } else if (detTotal !== null && Math.abs(calcSum - detTotal) < 0.01) {
+          badgeText = 'Verified Match';
+          badgeStyle = 'background:var(--success-bg); color:var(--success-text); border:1px solid var(--success-border);';
+        } else if (detTotal !== null) {
+          badgeText = 'Discrepancy';
+          badgeStyle = 'background:var(--danger-bg); color:var(--danger-text); border:1px solid var(--danger-border);';
+        } else if (hasMarks) {
+          badgeText = 'Calculated';
+          badgeStyle = 'background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe;';
+        }
+
+        const calcDisp = hasMarks ? calcSum.toFixed(1) : 'NA';
+        const detDisp = detTotal !== null ? detTotal.toFixed(1) : 'NA';
+
+        cardsHtml += `
+          <div style="flex: 1; min-width: 160px; background: #ffffff; border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div style="font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--primary); margin-bottom: 6px;">${iaName}</div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85rem; margin-bottom: 6px;">
+              <span style="color: var(--text-muted);">Calc: <strong style="color: var(--text-main); font-size: 1.1rem;">${calcDisp}</strong></span>
+              <span style="color: var(--text-muted);">Sheet: <strong style="color: var(--text-main); font-size: 1.1rem;">${detDisp}</strong></span>
+            </div>
+            <div style="text-align: right;">
+              <span class="score-badge" style="font-size: 0.72rem; padding: 2px 7px; ${badgeStyle}">${badgeText}</span>
+            </div>
+          </div>
+        `;
+      });
+      scoreBar.innerHTML = cardsHtml;
     }
   }
 
@@ -313,6 +380,21 @@
 
     Object.keys(sheet.results_by_ia).forEach((iaName) => {
       const marks = sheet.results_by_ia[iaName];
+
+      if (sheet.selected_ias.length > 1) {
+        const trHeader = document.createElement('tr');
+        trHeader.className = 'ia-section-header';
+        const isIaBlank = marks.every(m => m.is_blank || m.status === 'NA' || m.status === 'Blank' || m.verified_val === 'NA');
+        const statusNote = isIaBlank ? ' - Not Conducted / Blank' : '';
+        const iaTitleMap = {
+          'IA 1': 'First I.A. Test (IA 1)',
+          'IA 2': 'Second I.A. Test (IA 2)',
+          'IA 3': 'Third I.A. Test (IA 3)',
+        };
+        const titleText = (iaTitleMap[iaName] || iaName) + statusNote;
+        trHeader.innerHTML = `<th colspan="5" style="background:#e2e8f0; color:#1e293b; padding:8px 12px; font-weight:700; text-align:left; font-size:0.9rem; border-top:2px solid #cbd5e1;">${titleText}</th>`;
+        evalTableBody.appendChild(trHeader);
+      }
 
       marks.forEach((m) => {
         const tr = document.createElement('tr');
@@ -352,8 +434,9 @@
 
         // Detected Value & Confidence
         const tdDet = document.createElement('td');
-        const detStr = m.detected_str ? m.detected_str : '-';
-        const confStr = m.confidence !== null && m.confidence !== undefined && !m.is_blank
+        const isNaCell = m.is_blank || m.status === 'NA' || m.status === 'Blank' || m.detected_str === 'NA' || m.detected_str === '-';
+        const detStr = isNaCell ? 'NA' : (m.detected_str ? m.detected_str : 'NA');
+        const confStr = m.confidence !== null && m.confidence !== undefined && !isNaCell
           ? `<span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">(${Math.round(m.confidence * 100)}%)</span>`
           : '';
         tdDet.innerHTML = `<strong>${detStr}</strong>${confStr}`;
@@ -362,7 +445,7 @@
         // Status Badge
         const tdStatus = document.createElement('td');
         tdStatus.id = `status-${currentSheetIndex}-${iaName}-${m.id}`;
-        tdStatus.innerHTML = getBadgeHTML(m.status);
+        tdStatus.innerHTML = getBadgeHTML(isNaCell ? 'NA' : m.status);
         tr.appendChild(tdStatus);
 
         // Verified Mark (Editable Input)
@@ -370,19 +453,47 @@
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'mark-input';
-        input.value = m.verified_val !== null ? m.verified_val : '';
+        const displayVal = (m.verified_val !== null && m.verified_val !== undefined && m.verified_val !== 'NA')
+          ? m.verified_val
+          : 'NA';
+        input.value = displayVal;
+
+        input.addEventListener('focus', () => {
+          input.select();
+        });
 
         input.addEventListener('input', (e) => {
-          const valStr = e.target.value.trim();
-          const parsed = parseFloat(valStr);
-          m.verified_val = !isNaN(parsed) ? parsed : 0.0;
-          m.status = 'Corrected manually';
+          const valStr = e.target.value.trim().toUpperCase();
+          if (valStr === 'NA' || valStr === '-' || valStr === '') {
+            m.verified_val = 'NA';
+            m.status = 'NA';
+            m.is_blank = true;
+          } else {
+            const parsed = parseFloat(valStr);
+            m.verified_val = !isNaN(parsed) ? parsed : 0.0;
+            m.status = 'Corrected manually';
+            m.is_blank = false;
+          }
 
           const stCell = document.getElementById(`status-${currentSheetIndex}-${iaName}-${m.id}`);
           if (stCell) {
-            stCell.innerHTML = getBadgeHTML('Corrected manually');
+            stCell.innerHTML = getBadgeHTML(m.status);
           }
           recalculateTotals();
+        });
+
+        input.addEventListener('blur', (e) => {
+          if (e.target.value.trim() === '') {
+            e.target.value = 'NA';
+            m.verified_val = 'NA';
+            m.status = 'NA';
+            m.is_blank = true;
+            const stCell = document.getElementById(`status-${currentSheetIndex}-${iaName}-${m.id}`);
+            if (stCell) {
+              stCell.innerHTML = getBadgeHTML('NA');
+            }
+            recalculateTotals();
+          }
         });
 
         // Fast keyboard navigation: Enter / ArrowDown moves down, ArrowUp moves up

@@ -153,6 +153,39 @@ def test_export_eval_sheet_endpoints(client):
     assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in xlsx_resp.headers["content-type"]
     assert len(xlsx_resp.content) > 1000
 
+    # 3. Test multi-IA export with NA for unattempted cells
+    sample_multi_ia = {
+        "sheets": [{
+            "sheet_index": 1,
+            "sheet_label": "Sheet 1 (Page 1)",
+            "results_by_ia": {
+                "IA 1": [
+                    {"id": "1a", "label": "1.a", "detected_str": "3", "verified_val": 3.0, "status": "Valid", "is_blank": False},
+                    {"id": "1b", "label": "1.b", "detected_str": "1", "verified_val": 1.0, "status": "Valid", "is_blank": False},
+                    {"id": "1c", "label": "1.c", "detected_str": "NA", "verified_val": "NA", "status": "NA", "is_blank": True},
+                    {"id": "total", "label": "Total Marks", "detected_str": "4", "verified_val": 4.0, "status": "Valid", "is_blank": False},
+                ],
+                "IA 3": [
+                    {"id": "1a", "label": "1.a", "detected_str": "NA", "verified_val": "NA", "status": "NA", "is_blank": True},
+                    {"id": "1b", "label": "1.b", "detected_str": "NA", "verified_val": "NA", "status": "NA", "is_blank": True},
+                    {"id": "1c", "label": "1.c", "detected_str": "NA", "verified_val": "NA", "status": "NA", "is_blank": True},
+                    {"id": "total", "label": "Total Marks", "detected_str": "NA", "verified_val": "NA", "status": "NA", "is_blank": True},
+                ]
+            },
+            "summary_totals": {
+                "IA 1": {"calculated_sum": 4.0, "detected_total": 4.0, "matches": True},
+                "IA 3": {"calculated_sum": "NA", "detected_total": "NA", "is_blank": True, "matches": True},
+            }
+        }]
+    }
+
+    multi_resp = client.post("/api/export-sheet", json={"format": "csv", "data": sample_multi_ia})
+    assert multi_resp.status_code == 200
+    csv_text = multi_resp.text
+    assert "Sheet 1 (Page 1),IA 1,3,1,NA" in csv_text
+    assert "Sheet 1 (Page 1),IA 3,NA,NA,NA" in csv_text
+    assert "IA 3,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA" in csv_text
+
 
 def test_extract_multipage_pdf_endpoint(client):
     """Test extracting marks from a multi-page PDF containing multiple mark sheets."""
