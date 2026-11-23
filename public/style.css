@@ -68,6 +68,17 @@ header {
   color: var(--text-muted);
 }
 
+.college-logo {
+  display: block;
+  width: 78px;
+  height: 75px;
+  flex: 0 0 auto;
+  padding: 4px;
+  border-radius: 7px;
+  background: var(--primary);
+  object-fit: contain;
+}
+
 .model-pill {
   font-size: 0.75rem;
   font-weight: 600;
