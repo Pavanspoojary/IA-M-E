@@ -432,15 +432,18 @@ class DigitRecognizer:
             outputs = self.session.run([self.output_name], {self.input_name: tensor})
             raw_out = outputs[0][0]  # Shape: (10,)
 
-            # Apply temperature scaling to logits before softmax
-            temp = 0.25
-            shift = (raw_out - np.max(raw_out)) / temp
-            exp_vals = np.exp(shift)
-            probs = exp_vals / np.sum(exp_vals)
+            # Check if model output is already softmax probabilities
+            if abs(float(np.sum(raw_out)) - 1.0) < 0.05:
+                probs = raw_out.astype(float)
+            else:
+                temp = 1.0
+                shift = (raw_out - np.max(raw_out)) / temp
+                exp_vals = np.exp(shift)
+                probs = exp_vals / np.sum(exp_vals)
 
             ranked = np.argsort(probs)[::-1]
-            best_idx = ranked[0]
-            second_idx = ranked[1]
+            best_idx = int(ranked[0])
+            second_idx = int(ranked[1])
 
             best_digit = str(best_idx)
             second_digit = str(second_idx)
@@ -448,28 +451,50 @@ class DigitRecognizer:
             second_score = float(probs[second_idx])
 
             # Invariant checks for messy handwriting edge cases
+            tot_ink = float(np.sum(char_crop > 0))
+            mid_x = int(orig_w * 0.50)
+            left_x = int(orig_w * 0.35)
+            left_ink = float(np.sum(char_crop[:, :left_x] > 0))
+            left_frac = left_ink / max(1.0, tot_ink)
+
+            bot_y = int(orig_h * 0.55)
+            bot_ink = float(np.sum(char_crop[bot_y:, :] > 0))
+            bot_left_ink = float(np.sum(char_crop[bot_y:, :mid_x] > 0))
+            bot_right_ink = float(np.sum(char_crop[bot_y:, mid_x:] > 0))
+            bot_left_frac = bot_left_ink / max(1.0, bot_ink)
+
+            top_y = int(orig_h * 0.35)
+            top_right_ink = float(np.sum(char_crop[:top_y, mid_x:] > 0))
+            mid_y1, mid_y2 = int(orig_h * 0.30), int(orig_h * 0.55)
+            mid_right_ink = float(np.sum(char_crop[mid_y1:mid_y2, mid_x:] > 0))
+
+            l_top = float(np.sum(char_crop[:top_y, :mid_x] > 0))
+            r_top = float(np.sum(char_crop[:top_y, mid_x:] > 0))
+            c_top = float(np.sum(char_crop[:top_y, max(0, mid_x - 1) : min(orig_w, mid_x + 2)] > 0))
+
             if best_digit == "8":
-                bot_y = int(orig_h * 0.55)
-                mid_x = int(orig_w * 0.50)
-                bot_ink = float(np.sum(char_crop[bot_y:, :] > 0))
-                bot_left_ink = float(np.sum(char_crop[bot_y:, :mid_x] > 0))
-                bot_left_frac = bot_left_ink / max(1.0, bot_ink)
-
-                # Crossed 7 with horizontal bar (virtually no bottom-left ink)
-                if (bot_left_frac < 0.12 and bot_ink >= 4 and probs[7] >= 0.05) or (bot_left_ink <= 1 and bot_ink >= 6 and probs[7] >= 0.05):
+                # Open left side indicates a 3 or crossed 7 (an 8 MUST have closed loops on left)
+                if left_frac < 0.22 and bot_right_ink >= 4 and (probs[3] >= 0.005 or probs[3] >= probs[7]):
+                    best_digit = "3"
+                    best_score = max(0.92, float(probs[3]) if probs[3] > 0.05 else 0.90)
+                elif (bot_left_frac < 0.18 and bot_ink >= 4) or (bot_left_ink <= 1 and bot_ink >= 6):
                     best_digit = "7"
-                    best_score = max(0.96, float(probs[7]))
+                    best_score = max(0.95, float(probs[7]) if probs[7] > 0.05 else 0.92)
+                elif top_right_ink >= 3 and mid_right_ink <= 2 and probs[5] >= 0.005:
+                    best_digit = "5"
+                    best_score = max(0.92, float(probs[5]) if probs[5] > 0.05 else 0.90)
 
-            elif best_digit == "2":
-                top_h = int(orig_h * 0.40)
-                mid_x = orig_w // 2
-                l_top = float(np.sum(char_crop[:top_h, :mid_x] > 0))
-                r_top = float(np.sum(char_crop[:top_h, mid_x:] > 0))
-                center_top = float(np.sum(char_crop[:top_h, max(0, mid_x - 1) : min(orig_w, mid_x + 2)] > 0))
-                # Open-top 4 with two vertical stems at the top
-                if l_top >= 3 and r_top >= 3 and center_top <= 1 and (probs[4] >= 0.05 or probs[4] > probs[2] * 0.10):
+            elif best_digit == "6":
+                # Top horizontal bar indicates a 5 (a 6 has a curved ascender curving left, empty top-right)
+                if top_right_ink >= 3 and probs[5] >= 0.005:
+                    best_digit = "5"
+                    best_score = max(0.92, float(probs[5]) if probs[5] > 0.05 else 0.90)
+
+            elif best_digit in ("2", "7"):
+                # Open-top 4 with two distinct vertical stems at the top
+                if l_top >= 3 and r_top >= 3 and c_top <= 2 and (probs[4] >= 0.005 or probs[4] > probs[2] * 0.10):
                     best_digit = "4"
-                    best_score = max(0.95, float(probs[4]))
+                    best_score = max(0.95, float(probs[4]) if probs[4] > 0.05 else 0.92)
 
             margin = best_score - second_score
 

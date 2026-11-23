@@ -843,6 +843,13 @@ class EvalSheetExtractor:
             top=Side(style="thin", color="DDE2E5"),
             bottom=Side(style="thin", color="DDE2E5"),
         )
+        total_fill = PatternFill(start_color="EDF2F7", end_color="EDF2F7", fill_type="solid")
+        total_font = Font(name="Segoe UI", size=11, bold=True, color="1A365D")
+        verified_fill = PatternFill(start_color="DEF7EC", end_color="DEF7EC", fill_type="solid")
+        verified_font = Font(name="Segoe UI", size=10, bold=True, color="03543F")
+        discrepancy_fill = PatternFill(start_color="FDE8E8", end_color="FDE8E8", fill_type="solid")
+        discrepancy_font = Font(name="Segoe UI", size=10, bold=True, color="9B1C1C")
+        dim_font = Font(name="Segoe UI", size=10, color="A0AEC0")
 
         sheets = extraction_data.get("sheets") if extraction_data else None
         if not sheets and extraction_data and "results_by_ia" in extraction_data:
@@ -858,27 +865,33 @@ class EvalSheetExtractor:
         q_cols = self._get_question_columns(sheets)
 
         # Sheet 1: Marks Summary Matrix
-        last_col_letter = openpyxl.utils.get_column_letter(len(q_cols) + 4)
+        last_col_letter = openpyxl.utils.get_column_letter(len(q_cols) + 5)
         ws.merge_cells(f"A1:{last_col_letter}1")
-        ws["A1"] = "INTERNAL ASSESSMENT EVALUATION MARKS MATRIX"
+        ws["A1"] = "CONTINUOUS INTERNAL ASSESSMENT (IA) MARKS LEDGER"
         ws["A1"].font = title_font
-        ws["A1"].alignment = left_align
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
         ws.row_dimensions[1].height = 28
 
-        headers = ["Sheet / Page", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
-        col_widths = [18, 14] + [8] * len(q_cols) + [10, 16]
+        ws.merge_cells(f"A2:{last_col_letter}2")
+        ws["A2"] = "Generated via Neural Bluebook Extraction Engine | Verified Gradebook Matrix"
+        ws["A2"].font = Font(name="Segoe UI", size=9.5, italic=True, color="595959")
+        ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[2].height = 18
+
+        headers = ["Sheet / Student", "Assessment"] + [lbl for _, lbl in q_cols] + ["Calculated Total", "Sheet Detected Total", "Verification Status"]
+        col_widths = [22, 14] + [8] * len(q_cols) + [16, 20, 22]
 
         ws.append([])
         ws.append(headers)
-        ws.row_dimensions[3].height = 24
+        ws.row_dimensions[4].height = 24
 
         for col_idx in range(1, len(headers) + 1):
-            cell = ws.cell(row=3, column=col_idx)
+            cell = ws.cell(row=4, column=col_idx)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = center_align
 
-        current_row = 4
+        current_row = 5
         for sheet in sheets:
             sheet_label = sheet.get("sheet_label") or f"Sheet {sheet.get('sheet_index', 1)}"
             res_by_ia = sheet.get("results_by_ia", {})
@@ -895,33 +908,70 @@ class EvalSheetExtractor:
                         m_map[m_lbl] = m
 
                 q_vals = []
+                calc_sum = 0.0
                 for qid, qlbl in q_cols:
                     k1 = str(qid).lower().replace(" ", "").replace(".", "")
                     k2 = str(qlbl).lower().replace(" ", "").replace(".", "")
                     m_obj = m_map.get(k1) or m_map.get(k2)
-                    q_vals.append(self._format_mark_display(m_obj))
+                    v_str = self._format_mark_display(m_obj)
+                    q_vals.append(v_str)
+                    if v_str not in ("-", ""):
+                        try:
+                            calc_sum += float(v_str)
+                        except ValueError:
+                            pass
+
+                summary = sheet.get("summary_totals", {}).get(ia_name, {})
                 tot_m = m_map.get("total")
                 tot_val = self._format_mark_display(tot_m)
+                det_total = summary.get("detected_total")
+                if det_total is None and tot_val not in ("-", ""):
+                    try:
+                        det_total = float(tot_val)
+                    except ValueError:
+                        det_total = None
 
-                statuses = [m.get("status", "") for m in marks]
-                if any("Needs Review" in s or "Needs review" in s for s in statuses):
-                    row_status = "Needs Review"
-                elif any("Corrected" in s for s in statuses):
-                    row_status = "Corrected manually"
-                elif all(self._is_mark_unattempted(m) for m in marks if m.get("id") != "total"):
-                    row_status = "Blank"
+                calc_str = self._format_number_val(calc_sum)
+                det_str = self._format_number_val(det_total) if det_total is not None and det_total > 0 else (tot_val if tot_val not in ("-", "0") else "-")
+
+                if det_total is not None and det_total > 0 and abs(calc_sum - det_total) < 0.01:
+                    row_status = "Verified Match"
+                elif det_total is not None and det_total > 0:
+                    row_status = "Discrepancy Detected"
                 else:
-                    row_status = "Valid"
+                    row_status = "Evaluation Ready"
 
-                row_vals = [sheet_label, ia_name] + q_vals + [tot_val, row_status]
+                row_vals = [sheet_label, ia_name] + q_vals + [calc_str, det_str, row_status]
                 ws.append(row_vals)
                 ws.row_dimensions[current_row].height = 20
 
                 for col_idx in range(1, len(row_vals) + 1):
                     cell = ws.cell(row=current_row, column=col_idx)
-                    cell.font = bold_font if col_idx == len(row_vals) - 1 else regular_font
                     cell.border = thin_border
                     cell.alignment = left_align if col_idx == 1 else center_align
+
+                    # Calculated Total styling
+                    if col_idx == len(row_vals) - 2:
+                        cell.font = total_font
+                        cell.fill = total_fill
+                    # Verification Status styling
+                    elif col_idx == len(row_vals):
+                        if row_status == "Verified Match":
+                            cell.font = verified_font
+                            cell.fill = verified_fill
+                        elif row_status == "Discrepancy Detected":
+                            cell.font = discrepancy_font
+                            cell.fill = discrepancy_fill
+                        else:
+                            cell.font = regular_font
+                    # Question columns
+                    elif 3 <= col_idx < len(row_vals) - 2:
+                        if cell.value == "-":
+                            cell.font = dim_font
+                        else:
+                            cell.font = bold_font
+                    else:
+                        cell.font = regular_font
 
                 current_row += 1
 
@@ -1123,7 +1173,7 @@ class EvalSheetExtractor:
 
         q_cols = self._get_question_columns(sheets)
 
-        headers = ["Sheet", "Assessment"] + [lbl for _, lbl in q_cols] + ["Total", "Status"]
+        headers = ["Sheet / Student", "Assessment"] + [lbl for _, lbl in q_cols] + ["Calculated Total", "Sheet Detected Total", "Verification Status"]
         writer.writerow(headers)
 
         canonical_order = ["IA 1", "IA 2", "IA 3"]
@@ -1172,16 +1222,16 @@ class EvalSheetExtractor:
                     except ValueError:
                         det_total = None
 
-                det_str = self._format_number_val(det_total) if det_total is not None else tot_val
-
                 calc_str = self._format_number_val(calc_sum)
-                if det_total is not None and abs(calc_sum - det_total) < 0.01:
+                det_str = self._format_number_val(det_total) if det_total is not None and det_total > 0 else (tot_val if tot_val not in ("-", "0") else "-")
+
+                if det_total is not None and det_total > 0 and abs(calc_sum - det_total) < 0.01:
                     row_status = "Verified Match"
-                elif det_total is not None:
+                elif det_total is not None and det_total > 0:
                     row_status = "Discrepancy Detected"
                 else:
                     row_status = "Evaluation Ready"
 
-                writer.writerow([sheet_label, ia_name] + q_vals + [tot_val if tot_val not in ("-", "") else calc_str, row_status])
+                writer.writerow([sheet_label, ia_name] + q_vals + [calc_str, det_str, row_status])
 
         return out.getvalue()

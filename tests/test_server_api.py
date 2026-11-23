@@ -142,7 +142,7 @@ def test_export_eval_sheet_endpoints(client):
     assert csv_resp.status_code == 200
     assert "text/csv" in csv_resp.headers["content-type"]
     assert csv_resp.content.startswith(b"\xef\xbb\xbf")
-    assert "Sheet,Assessment,1a,1b,2a,2b,3a,3b,3b-alt,4a,4b,Total,Status" in csv_resp.text
+    assert "Sheet / Student,Assessment,1a,1b,2a,2b,3a,3b,3b-alt,4a,4b,Calculated Total,Sheet Detected Total,Verification Status" in csv_resp.text
 
     # 2. Test XLSX export
     xlsx_resp = client.post(
@@ -198,7 +198,7 @@ def test_extract_multipage_pdf_endpoint(client):
     assert csv_resp.status_code == 200
     assert "text/csv" in csv_resp.headers["content-type"]
     assert csv_resp.content.startswith(b"\xef\xbb\xbf")
-    assert "Sheet,Assessment,1a,1b,2a,2b,3a,3b,3b-alt,4a,4b,Total,Status" in csv_resp.text
+    assert "Sheet / Student,Assessment,1a,1b,2a,2b,3a,3b,3b-alt,4a,4b,Calculated Total,Sheet Detected Total,Verification Status" in csv_resp.text
     assert "Sheet 1 (Page 1),IA 1" in csv_resp.text
     assert "Sheet 2 (Page 2),IA 1" in csv_resp.text
 
@@ -307,7 +307,7 @@ def test_extract_distribution_of_marks_template(client):
         json={"format": "csv", "data": data},
     )
     assert csv_resp.status_code == 200
-    assert "Sheet,Assessment,1.a,1.b,1.c,2.a,2.b,2.c,3.a,3.b,3.c,4.a,4.b,4.c,Total,Status" in csv_resp.text
+    assert "Sheet / Student,Assessment,1.a,1.b,1.c,2.a,2.b,2.c,3.a,3.b,3.c,4.a,4.b,4.c,Calculated Total,Sheet Detected Total,Verification Status" in csv_resp.text
 
     # Verify XLSX export
     xlsx_resp = client.post(

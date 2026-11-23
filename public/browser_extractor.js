@@ -1015,28 +1015,54 @@
       nctx.fillStyle = '#000000';
       nctx.fillRect(0, 0, 28, 28);
 
-      // Create cropped digit canvas
+      // Create cropped digit canvas with adaptive dilation for thin pen strokes
       const dCanvas = document.createElement('canvas');
       dCanvas.width = dw;
       dCanvas.height = dh;
       const dctx = dCanvas.getContext('2d', { willReadFrequently: true });
       const dImgData = dctx.createImageData(dw, dh);
 
+      const rawMask = new Uint8Array(dw * dh);
+      let strokePixelCount = 0;
       for (let y = minY; y <= maxY; y++) {
         for (let x = minX; x <= maxX; x++) {
           const srcIdx = y * w + x;
-          const dstIdx = ((y - minY) * dw + (x - minX)) * 4;
+          const dstIdx = (y - minY) * dw + (x - minX);
           if (mask[srcIdx]) {
-            dImgData.data[dstIdx] = 255;
-            dImgData.data[dstIdx + 1] = 255;
-            dImgData.data[dstIdx + 2] = 255;
-            dImgData.data[dstIdx + 3] = 255;
-          } else {
-            dImgData.data[dstIdx] = 0;
-            dImgData.data[dstIdx + 1] = 0;
-            dImgData.data[dstIdx + 2] = 0;
-            dImgData.data[dstIdx + 3] = 255;
+            rawMask[dstIdx] = 1;
+            strokePixelCount++;
           }
+        }
+      }
+
+      // Check if stroke needs dilation (thin pen strokes)
+      const needsDilation = (strokePixelCount / Math.max(1, dh) < 3.2);
+      const finalMask = new Uint8Array(dw * dh);
+      for (let y = 0; y < dh; y++) {
+        for (let x = 0; x < dw; x++) {
+          const idx = y * dw + x;
+          if (rawMask[idx]) {
+            finalMask[idx] = 1;
+            if (needsDilation) {
+              if (x + 1 < dw) finalMask[idx + 1] = 1;
+              if (y + 1 < dh) finalMask[(y + 1) * dw + x] = 1;
+            }
+          }
+        }
+      }
+
+      for (let i = 0; i < dw * dh; i++) {
+        const p = i * 4;
+        if (finalMask[i]) {
+          dImgData.data[p] = 255;
+          dImgData.data[p + 1] = 255;
+          dImgData.data[p + 2] = 255;
+          dImgData.data[p + 3] = 255;
+        } else {
+          dImgData.data[p] = 0;
+          dImgData.data[p + 1] = 0;
+          dImgData.data[p + 2] = 0;
+          dImgData.data[p + 3] = 255;
         }
       }
       dctx.putImageData(dImgData, 0, 0);
@@ -1120,7 +1146,7 @@
           let expSum = 0;
           const sProbs = new Float32Array(10);
           for (let i = 0; i < 10; i++) {
-            sProbs[i] = Math.exp((outData[sOff + i] - maxLogit) / 0.25);
+            sProbs[i] = Math.exp((outData[sOff + i] - maxLogit) / 1.0);
             expSum += sProbs[i];
           }
           for (let i = 0; i < 10; i++) {
@@ -1183,52 +1209,70 @@
         const res = await this.classifyDigit(tensorData);
 
         // Invariant checks for messy handwriting edge cases
-        if (res.digit === '8' && res.probs) {
-          let botInk = 0;
-          let botLeftInk = 0;
-          const boxW = box.maxX - box.minX + 1;
-          const boxH = box.maxY - box.minY + 1;
-          const midX = box.minX + Math.round(boxW * 0.50);
-          const botY = box.minY + Math.round(boxH * 0.55);
+        const boxW = box.maxX - box.minX + 1;
+        const boxH = box.maxY - box.minY + 1;
+        const midX = box.minX + Math.round(boxW * 0.50);
+        const leftX = box.minX + Math.round(boxW * 0.35);
+        const botY = box.minY + Math.round(boxH * 0.55);
+        const topY = box.minY + Math.round(boxH * 0.35);
+        const midY1 = box.minY + Math.round(boxH * 0.30);
+        const midY2 = box.minY + Math.round(boxH * 0.55);
 
-          for (let cy = botY; cy <= box.maxY; cy++) {
-            const rOff = cy * cellInfo.w;
-            for (let cx = box.minX; cx <= box.maxX; cx++) {
-              if (cellInfo.mask[rOff + cx]) {
+        let totInk = 0, leftInk = 0;
+        let botInk = 0, botLeftInk = 0, botRightInk = 0;
+        let topRightInk = 0, midRightInk = 0;
+        let lTop = 0, rTop = 0, cTop = 0;
+
+        for (let cy = box.minY; cy <= box.maxY; cy++) {
+          const rOff = cy * cellInfo.w;
+          for (let cx = box.minX; cx <= box.maxX; cx++) {
+            if (cellInfo.mask[rOff + cx]) {
+              totInk++;
+              if (cx <= leftX) leftInk++;
+              if (cy >= botY) {
                 botInk++;
                 if (cx < midX) botLeftInk++;
+                else botRightInk++;
+              }
+              if (cy <= topY) {
+                if (cx >= midX) topRightInk++;
+                if (cx < midX) lTop++;
+                else rTop++;
+                if (Math.abs(cx - midX) <= 1) cTop++;
+              }
+              if (cy >= midY1 && cy <= midY2 && cx >= midX) {
+                midRightInk++;
               }
             }
-          }
-          const botLeftFrac = botLeftInk / Math.max(1, botInk);
-
-          // Crossed 7 with horizontal bar (virtually no bottom-left ink)
-          if ((botLeftFrac < 0.12 && botInk >= 4 && res.probs[7] >= 0.05) || (botLeftInk <= 1 && botInk >= 6 && res.probs[7] >= 0.05)) {
-            res.digit = '7';
-            res.confidence = Math.max(0.96, res.probs[7] || 0.96);
           }
         }
 
-        // Open-top 4 vs 2
-        if (res.digit === '2' && res.probs) {
-          let rightTopInk = 0, leftTopInk = 0, centerTopInk = 0;
-          const boxW = box.maxX - box.minX + 1;
-          const boxH = box.maxY - box.minY + 1;
-          const topH = box.minY + Math.round(boxH * 0.40);
-          const midW = box.minX + Math.round(boxW * 0.50);
-          for (let cy = box.minY; cy <= topH; cy++) {
-            const rOff = cy * cellInfo.w;
-            for (let cx = box.minX; cx <= box.maxX; cx++) {
-              if (cellInfo.mask[rOff + cx]) {
-                if (Math.abs(cx - midW) <= 1) centerTopInk++;
-                if (cx > midW) rightTopInk++;
-                else if (cx < midW) leftTopInk++;
-              }
-            }
+        const leftFrac = leftInk / Math.max(1, totInk);
+        const botLeftFrac = botLeftInk / Math.max(1, botInk);
+
+        if (res.digit === '8' && res.probs) {
+          // Open left side indicates a 3 or crossed 7 (an 8 MUST have closed loops on left)
+          if (leftFrac < 0.22 && botRightInk >= 4 && (res.probs[3] >= 0.005 || res.probs[3] >= res.probs[7])) {
+            res.digit = '3';
+            res.confidence = Math.max(0.92, res.probs[3] > 0.05 ? res.probs[3] : 0.90);
+          } else if ((botLeftFrac < 0.18 && botInk >= 4) || (botLeftInk <= 1 && botInk >= 6)) {
+            res.digit = '7';
+            res.confidence = Math.max(0.95, res.probs[7] > 0.05 ? res.probs[7] : 0.92);
+          } else if (topRightInk >= 3 && midRightInk <= 2 && res.probs[5] >= 0.005) {
+            res.digit = '5';
+            res.confidence = Math.max(0.92, res.probs[5] > 0.05 ? res.probs[5] : 0.90);
           }
-          if (rightTopInk >= 3 && leftTopInk >= 3 && centerTopInk <= 1 && (res.probs[4] >= 0.05 || res.probs[4] > res.probs[2] * 0.10)) {
+        } else if (res.digit === '6' && res.probs) {
+          // Top horizontal bar indicates a 5 (a 6 has a curved ascender curving left, empty top-right)
+          if (topRightInk >= 3 && res.probs[5] >= 0.005) {
+            res.digit = '5';
+            res.confidence = Math.max(0.92, res.probs[5] > 0.05 ? res.probs[5] : 0.90);
+          }
+        } else if ((res.digit === '2' || res.digit === '7') && res.probs) {
+          // Open-top 4 with two distinct vertical stems at the top
+          if (lTop >= 3 && rTop >= 3 && cTop <= 2 && (res.probs[4] >= 0.005 || res.probs[4] > res.probs[2] * 0.10)) {
             res.digit = '4';
-            res.confidence = Math.max(0.95, res.probs[4] || 0.95);
+            res.confidence = Math.max(0.95, res.probs[4] > 0.05 ? res.probs[4] : 0.92);
           }
         }
 
@@ -1335,9 +1379,9 @@
               r1.confidence = Math.max(0.92, r1.probs[2] || 0.85);
             }
 
-            if (r2.digit === '2' && r2.probs && (r2.probs[4] >= 0.04 || r2.probs[4] > r2.probs[2] * 0.18)) {
+            if (r2.digit === '2' && r2.probs && (r2.probs[4] >= 0.02 || r2.probs[4] > r2.probs[2] * 0.15)) {
               r2.digit = '4';
-              r2.confidence = Math.max(0.92, r2.probs[4]);
+              r2.confidence = Math.max(0.92, r2.probs[4] || 0.90);
             }
 
             const candVal = `${r1.digit}${r2.digit}`;
@@ -1348,7 +1392,7 @@
             // Mild tie-breaker only when candidates have very close visual confidence:
             // Never override clear visual handwriting evidence with question sum
             const diff = expectedTotal ? Math.abs(num - expectedTotal) : 0;
-            const bonus = diff === 0 ? 1.25 : (diff <= 1 ? 1.10 : 1.0);
+            const bonus = diff === 0 ? 1.05 : (diff <= 1 ? 1.02 : 1.0);
             const score = prod * bonus;
 
             if (score > bestScore) {
@@ -1623,11 +1667,12 @@
           ];
 
       const headerLine = [
-        'Sheet',
-        'Assessment',
-        ...qColumns.map(q => q.label),
-        'Total',
-        'Status',
+        '"Sheet / Student"',
+        '"Assessment"',
+        ...qColumns.map(q => `"${q.label}"`),
+        '"Calculated Total"',
+        '"Sheet Detected Total"',
+        '"Verification Status"',
       ].join(',');
 
       const lines = [headerLine];
@@ -1662,26 +1707,31 @@
 
           qColumns.forEach((col) => {
             const m = markMap[normKey(col.id)] || markMap[normKey(col.label)];
-            if (!m) {
-              rowVals.push('0');
+            if (!m || m.is_blank || m.status === 'Blank') {
+              rowVals.push('"-"');
+            } else if (m.detected_str === '-' && (m.verified_val === 0 || m.verified_val === null)) {
+              rowVals.push('"-"');
             } else if (m.verified_val !== null && m.verified_val !== undefined) {
               rowVals.push(String(m.verified_val));
             } else if (m.numeric_val !== null && m.numeric_val !== undefined) {
               rowVals.push(String(m.numeric_val));
             } else {
-              rowVals.push('0');
+              rowVals.push('"-"');
             }
           });
 
           // Summary totals
           const summary = (s.summary_totals && s.summary_totals[ia]) || {};
           const totMark = marksList.find((m) => normKey(m.id) === 'total' || normKey(m.label).includes('total'));
-          const calcSum = summary.calculated_sum !== undefined ? summary.calculated_sum : 0;
-          const detTotal = (totMark && totMark.verified_val !== null) ? totMark.verified_val : (summary.detected_total !== undefined && summary.detected_total !== null ? summary.detected_total : (calcSum || 0));
+          const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
+          const detTotal = (totMark && totMark.verified_val !== null && totMark.verified_val !== undefined)
+            ? Number(totMark.verified_val)
+            : (summary.detected_total !== undefined && summary.detected_total !== null && summary.detected_total > 0 ? Number(summary.detected_total) : '-');
 
+          rowVals.push(String(calcSum));
           rowVals.push(String(detTotal));
 
-          const status = summary.matches ? 'Verified Match' : (summary.detected_total !== null && summary.detected_total !== undefined ? 'Discrepancy' : 'Valid');
+          const status = summary.matches ? 'Verified Match' : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? 'Discrepancy Detected' : 'Evaluation Ready');
           rowVals.push(`"${status}"`);
 
           lines.push(rowVals.join(','));
@@ -1696,10 +1746,11 @@
 
     /**
      * Export data to XLSX Excel file and download.
+     * Features professional academic styling, merged titles, auto-column widths, and clean question alignment.
      */
     downloadXlsx(extractionData, filename = 'IA_Marks_Evaluation.xlsx') {
       if (typeof XLSX === 'undefined') {
-        throw new Error('SheetJS (xlsx) library is not loaded.');
+        throw new Error('SheetJS / xlsx-js-style library is not loaded.');
       }
 
       const wb = XLSX.utils.book_new();
@@ -1737,18 +1788,28 @@
 
       const sortedSheets = [...sheets].sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0));
       const canonicalOrder = ['IA 1', 'IA 2', 'IA 3'];
+      const totalCols = 2 + qColumns.length + 3; // Sheet, Assessment, Questions..., CalcTotal, DetTotal, Status
+      const lastColIdx = totalCols - 1;
+
+      const thinBorder = {
+        top: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        left: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        right: { style: 'thin', color: { rgb: 'D9D9D9' } },
+      };
 
       // --- Worksheet 1: Summary Matrix ---
       const summaryRows = [
         ['CONTINUOUS INTERNAL ASSESSMENT (IA) MARKS LEDGER'],
         ['Generated via Neural Bluebook Extraction Engine | Verified Gradebook Matrix'],
         [],
-        ['Sheet / Student', 'Page', 'Assessment', ...qColumns.map(q => q.label), 'Calculated Total', 'Sheet Detected Total', 'Verification Status'],
+        ['Sheet / Student', 'Assessment', ...qColumns.map(q => q.label), 'Calculated Total', 'Sheet Detected Total', 'Verification Status'],
       ];
+
+      const summaryDataRowsCount = [];
 
       sortedSheets.forEach((s) => {
         const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
-        const pageNum = s.page_number || s.sheet_index || 1;
         const resultsByIA = s.results_by_ia || {};
 
         const iaKeys = Object.keys(resultsByIA).sort((a, b) => {
@@ -1768,54 +1829,176 @@
             if (m.label) markMap[normKey(m.label)] = m;
           });
 
-          const row = [sLabel, pageNum, ia];
+          const row = [sLabel, ia];
 
           qColumns.forEach((col) => {
             const m = markMap[normKey(col.id)] || markMap[normKey(col.label)];
-            if (!m) {
-              row.push(0);
+            if (!m || m.is_blank || m.status === 'Blank') {
+              row.push('-');
+            } else if (m.detected_str === '-' && (m.verified_val === 0 || m.verified_val === null)) {
+              row.push('-');
             } else if (m.verified_val !== null && m.verified_val !== undefined) {
               row.push(Number(m.verified_val));
             } else if (m.numeric_val !== null && m.numeric_val !== undefined) {
               row.push(Number(m.numeric_val));
             } else {
-              row.push(0);
+              row.push('-');
             }
           });
 
           const summary = (s.summary_totals && s.summary_totals[ia]) || {};
           const totMark = marksList.find((m) => normKey(m.id) === 'total' || normKey(m.label).includes('total'));
           const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
-          const detTotal = (totMark && totMark.verified_val !== null) ? Number(totMark.verified_val) : (summary.detected_total !== null && summary.detected_total !== undefined ? Number(summary.detected_total) : '-');
+          const detTotal = (totMark && totMark.verified_val !== null && totMark.verified_val !== undefined)
+            ? Number(totMark.verified_val)
+            : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? Number(summary.detected_total) : '-');
 
           row.push(calcSum);
           row.push(detTotal);
 
-          const status = summary.matches ? 'Verified Match' : (summary.detected_total !== null && summary.detected_total !== undefined ? 'Discrepancy Detected' : 'Evaluation Ready');
+          const status = summary.matches ? 'Verified Match' : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? 'Discrepancy Detected' : 'Evaluation Ready');
           row.push(status);
 
           summaryRows.push(row);
+          summaryDataRowsCount.push(true);
         });
       });
 
       const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
-      wsSummary['!cols'] = [
-        { wch: 22 }, { wch: 8 }, { wch: 18 },
-        ...qColumns.map(() => ({ wch: 8 })),
-        { wch: 16 }, { wch: 20 }, { wch: 22 },
+
+      // Title & Subtitle Cell Merging
+      wsSummary['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: lastColIdx } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: lastColIdx } },
       ];
+
+      // Row Heights (pt)
+      wsSummary['!rows'] = [
+        { hpt: 26 }, // Title
+        { hpt: 18 }, // Subtitle
+        { hpt: 6 },  // Spacer
+        { hpt: 24 }, // Header
+        ...summaryDataRowsCount.map(() => ({ hpt: 20 })),
+      ];
+
+      // Auto Column Widths
+      wsSummary['!cols'] = [
+        { wch: 22 }, // Sheet / Student
+        { wch: 14 }, // Assessment
+        ...qColumns.map(() => ({ wch: 7.5 })), // Question columns
+        { wch: 16 }, // Calculated Total
+        { wch: 20 }, // Sheet Detected Total
+        { wch: 22 }, // Verification Status
+      ];
+
+      // Professional Cell Styling (supported natively via xlsx-js-style)
+      const rangeSum = XLSX.utils.decode_range(wsSummary['!ref'] || 'A1:A1');
+      for (let R = rangeSum.s.r; R <= rangeSum.e.r; ++R) {
+        for (let C = rangeSum.s.c; C <= rangeSum.e.c; ++C) {
+          const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+          const cell = wsSummary[cellRef];
+          if (!cell) continue;
+
+          if (R === 0) {
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 14, bold: true, color: { rgb: '1F4E79' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+            };
+          } else if (R === 1) {
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 9.5, italic: true, color: { rgb: '595959' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+            };
+          } else if (R === 3) {
+            cell.s = {
+              fill: { fgColor: { rgb: '1F4E79' } },
+              font: { name: 'Segoe UI', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
+              alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+              border: thinBorder,
+            };
+          } else if (R >= 4) {
+            if (C === 0) {
+              cell.s = {
+                font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '1A202C' } },
+                alignment: { horizontal: 'left', vertical: 'center' },
+                border: thinBorder,
+              };
+            } else if (C === 1) {
+              cell.s = {
+                font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '2B6CB0' } },
+                alignment: { horizontal: 'center', vertical: 'center' },
+                border: thinBorder,
+              };
+            } else if (C >= 2 && C < 2 + qColumns.length) {
+              if (cell.v === '-') {
+                cell.s = {
+                  font: { name: 'Segoe UI', sz: 10, color: { rgb: 'A0AEC0' } },
+                  alignment: { horizontal: 'center', vertical: 'center' },
+                  border: thinBorder,
+                };
+              } else {
+                cell.s = {
+                  font: { name: 'Segoe UI', sz: 10.5, bold: true, color: { rgb: '1A202C' } },
+                  alignment: { horizontal: 'center', vertical: 'center' },
+                  border: thinBorder,
+                };
+              }
+            } else if (C === 2 + qColumns.length) {
+              cell.s = {
+                fill: { fgColor: { rgb: 'EDF2F7' } },
+                font: { name: 'Segoe UI', sz: 11, bold: true, color: { rgb: '1A365D' } },
+                alignment: { horizontal: 'center', vertical: 'center' },
+                border: thinBorder,
+              };
+            } else if (C === 2 + qColumns.length + 1) {
+              cell.s = {
+                fill: { fgColor: { rgb: 'F7FAFC' } },
+                font: { name: 'Segoe UI', sz: 10.5, color: { rgb: '2D3748' } },
+                alignment: { horizontal: 'center', vertical: 'center' },
+                border: thinBorder,
+              };
+            } else if (C === 2 + qColumns.length + 2) {
+              if (cell.v === 'Verified Match') {
+                cell.s = {
+                  fill: { fgColor: { rgb: 'DEF7EC' } },
+                  font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '03543F' } },
+                  alignment: { horizontal: 'center', vertical: 'center' },
+                  border: thinBorder,
+                };
+              } else if (cell.v === 'Discrepancy Detected') {
+                cell.s = {
+                  fill: { fgColor: { rgb: 'FDE8E8' } },
+                  font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '9B1C1C' } },
+                  alignment: { horizontal: 'center', vertical: 'center' },
+                  border: thinBorder,
+                };
+              } else {
+                cell.s = {
+                  fill: { fgColor: { rgb: 'EBF5FF' } },
+                  font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: '1E429F' } },
+                  alignment: { horizontal: 'center', vertical: 'center' },
+                  border: thinBorder,
+                };
+              }
+            }
+          }
+        }
+      }
+
       XLSX.utils.book_append_sheet(wb, wsSummary, 'IA Marks Summary');
 
       // --- Worksheet 2: Detailed Question Breakdown ---
       const detailRows = [
         ['DETAILED QUESTION BREAKDOWN AND RECOGNITION AUDIT'],
+        ['Atomic Handwritten Stroke Digitization & Confidence Analysis'],
         [],
-        ['Sheet', 'Page', 'Assessment', 'Question ID', 'Question Label', 'Maximum Marks', 'Raw Detected', 'Confidence (%)', 'Verified Mark', 'Status'],
+        ['Sheet / Student', 'Assessment', 'Question ID', 'Question Label', 'Maximum Marks', 'Raw Detected', 'Confidence (%)', 'Verified Mark', 'Status'],
       ];
+
+      const detailDataCount = [];
 
       sortedSheets.forEach((s) => {
         const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
-        const pageNum = s.page_number || s.sheet_index || 1;
         const resultsByIA = s.results_by_ia || {};
 
         const iaKeys = Object.keys(resultsByIA).sort((a, b) => {
@@ -1831,7 +2014,6 @@
             const confPct = m.confidence !== null && m.confidence !== undefined ? Math.round(m.confidence * 100) : '-';
             detailRows.push([
               sLabel,
-              pageNum,
               ia,
               m.id || '',
               m.label || '',
@@ -1841,22 +2023,69 @@
               m.verified_val !== null ? m.verified_val : 0,
               m.status || 'Valid',
             ]);
+            detailDataCount.push(true);
           });
         });
       });
 
       const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-      wsDetail['!cols'] = [
-        { wch: 20 }, { wch: 8 }, { wch: 16 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 },
+      wsDetail['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 8 } },
       ];
+      wsDetail['!rows'] = [
+        { hpt: 26 }, { hpt: 18 }, { hpt: 6 }, { hpt: 24 },
+        ...detailDataCount.map(() => ({ hpt: 19 })),
+      ];
+      wsDetail['!cols'] = [
+        { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 },
+      ];
+
+      const rangeDet = XLSX.utils.decode_range(wsDetail['!ref'] || 'A1:A1');
+      for (let R = rangeDet.s.r; R <= rangeDet.e.r; ++R) {
+        for (let C = rangeDet.s.c; C <= rangeDet.e.c; ++C) {
+          const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+          const cell = wsDetail[cellRef];
+          if (!cell) continue;
+
+          if (R === 0) {
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 14, bold: true, color: { rgb: '1F4E79' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+            };
+          } else if (R === 1) {
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 9.5, italic: true, color: { rgb: '595959' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+            };
+          } else if (R === 3) {
+            cell.s = {
+              fill: { fgColor: { rgb: '1F4E79' } },
+              font: { name: 'Segoe UI', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+              border: thinBorder,
+            };
+          } else if (R >= 4) {
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 10, color: { rgb: '1A202C' } },
+              alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
+              border: thinBorder,
+            };
+          }
+        }
+      }
+
       XLSX.utils.book_append_sheet(wb, wsDetail, 'Detailed Breakdown');
 
       // --- Worksheet 3: Discrepancy & Verification Audit ---
       const auditRows = [
         ['EXAMINATION INTEGRITY & TOTAL DISCREPANCY AUDIT'],
+        ['Automated Summation Verification vs Faculty Handwritten Total'],
         [],
-        ['Sheet', 'Assessment', 'Calculated Question Sum', 'Sheet Detected Total', 'Difference', 'Reconciliation Status'],
+        ['Sheet / Student', 'Assessment', 'Calculated Question Sum', 'Sheet Detected Total', 'Difference', 'Reconciliation Status'],
       ];
+
+      const auditDataCount = [];
 
       sortedSheets.forEach((s) => {
         const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
@@ -1868,7 +2097,7 @@
           const marksList = resultsByIA[ia] || [];
           const totMark = marksList.find((m) => normKey(m.id) === 'total');
           const calcSum = summary.calculated_sum !== undefined ? Number(summary.calculated_sum) : 0;
-          const detTotal = totMark && totMark.verified_val !== null ? Number(totMark.verified_val) : (summary.detected_total !== null && summary.detected_total !== undefined ? Number(summary.detected_total) : null);
+          const detTotal = totMark && totMark.verified_val !== null ? Number(totMark.verified_val) : (summary.detected_total !== null && summary.detected_total !== undefined && summary.detected_total > 0 ? Number(summary.detected_total) : null);
           const diff = detTotal !== null ? Math.round((calcSum - detTotal) * 10) / 10 : '-';
           const recStatus = detTotal === null ? 'No Sheet Total' : (Math.abs(calcSum - detTotal) < 0.01 ? 'Verified Match' : 'Discrepancy Flagged');
 
@@ -1880,13 +2109,57 @@
             diff,
             recStatus,
           ]);
+          auditDataCount.push(true);
         });
       });
 
       const wsAudit = XLSX.utils.aoa_to_sheet(auditRows);
-      wsAudit['!cols'] = [
-        { wch: 20 }, { wch: 16 }, { wch: 24 }, { wch: 22 }, { wch: 14 }, { wch: 24 },
+      wsAudit['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 5 } },
       ];
+      wsAudit['!rows'] = [
+        { hpt: 26 }, { hpt: 18 }, { hpt: 6 }, { hpt: 24 },
+        ...auditDataCount.map(() => ({ hpt: 20 })),
+      ];
+      wsAudit['!cols'] = [
+        { wch: 22 }, { wch: 14 }, { wch: 24 }, { wch: 22 }, { wch: 14 }, { wch: 24 },
+      ];
+
+      const rangeAud = XLSX.utils.decode_range(wsAudit['!ref'] || 'A1:A1');
+      for (let R = rangeAud.s.r; R <= rangeAud.e.r; ++R) {
+        for (let C = rangeAud.s.c; C <= rangeAud.e.c; ++C) {
+          const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+          const cell = wsAudit[cellRef];
+          if (!cell) continue;
+
+          if (R === 0) {
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 14, bold: true, color: { rgb: '1F4E79' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+            };
+          } else if (R === 1) {
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 9.5, italic: true, color: { rgb: '595959' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+            };
+          } else if (R === 3) {
+            cell.s = {
+              fill: { fgColor: { rgb: '1F4E79' } },
+              font: { name: 'Segoe UI', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+              border: thinBorder,
+            };
+          } else if (R >= 4) {
+            cell.s = {
+              font: { name: 'Segoe UI', sz: 10, color: { rgb: '1A202C' } },
+              alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
+              border: thinBorder,
+            };
+          }
+        }
+      }
+
       XLSX.utils.book_append_sheet(wb, wsAudit, 'Integrity Audit');
 
       XLSX.writeFile(wb, filename);
