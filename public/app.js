@@ -685,8 +685,8 @@
       let blob;
       if (format === 'csv') {
         const text = await resp.text();
-        const hasBom = text.charCodeAt(0) === 0xfeff;
-        blob = new Blob([hasBom ? text : '\ufeff' + text], { type: 'text/csv;charset=utf-8;' });
+        const cleanText = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+        blob = new Blob([cleanText], { type: 'text/csv;charset=utf-8;' });
       } else {
         blob = await resp.blob();
       }
@@ -704,12 +704,16 @@
       const filename = `IA_Marks_Evaluation_${safeIa}.${ext}`;
 
       const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      link.href = url;
       link.download = filename;
+      link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(link.href);
+      setTimeout(() => {
+        if (link.parentNode) link.parentNode.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 1000);
     } catch (err) {
       alert(`Export error: ${err.message}`);
     }

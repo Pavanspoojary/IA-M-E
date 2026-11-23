@@ -1785,7 +1785,7 @@
         });
       });
 
-      const csvContent = '\ufeff' + lines.join('\r\n') + '\r\n';
+      const csvContent = lines.join('\r\n') + '\r\n';
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       this._triggerDownload(blob, filename);
     }
@@ -1968,12 +1968,16 @@
 
     _triggerDownload(blob, filename) {
       const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      link.href = url;
       link.download = filename;
+      link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(link.href);
+      setTimeout(() => {
+        if (link.parentNode) link.parentNode.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 1000);
     }
   }
 
