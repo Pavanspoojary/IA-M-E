@@ -40,13 +40,13 @@
 
       <div class="pdf-mode-settings" id="pdfModeSettings" style="display: none;">
         <h3>PDF sequence settings</h3>
-        <p>Assign USNs to PDF pages in order. Listed USNs are skipped before assigning the next page.</p>
+        <p>The 4MW prefix is added automatically. Assign USNs to PDF pages in order and list any suffixes to skip.</p>
         <div class="pdf-mode-fields">
           <label for="startingUsn">Starting USN
-            <input type="text" id="startingUsn" value="4MW24AD001" placeholder="4MW24AD001" autocomplete="off">
+            <span class="usn-input"><span class="usn-prefix">4MW</span><input type="text" id="startingUsn" value="24AD001" placeholder="24AD001" autocomplete="off"></span>
           </label>
-          <label for="skipUsns">Skip USNs (comma separated, optional)
-            <input type="text" id="skipUsns" placeholder="4MW24AD004, 4MW24AD009" autocomplete="off">
+          <label for="skipUsns">Skip USN suffixes (comma separated, optional)
+            <input type="text" id="skipUsns" placeholder="24AD004, 24AD009" autocomplete="off">
           </label>
         </div>
       </div>

@@ -168,13 +168,18 @@
     let startingUsn = '';
     let skippedUsns = new Set();
     if (pdfMode) {
-      startingUsn = startingUsnInput.value.trim().toUpperCase();
-      if (!/^.*\d+$/.test(startingUsn)) {
-        alert('Enter a starting USN that ends in digits, for example 4MW24AD001.');
+      const usnPrefix = '4MW';
+      const startingSuffix = startingUsnInput.value.trim().toUpperCase().replace(/^4MW/, '');
+      if (!/^.*\d+$/.test(startingSuffix)) {
+        alert('Enter the part after 4MW, ending in digits, for example 24AD001.');
         startingUsnInput.focus();
         return;
       }
-      skippedUsns = new Set(skipUsnsInput.value.split(',').map((usn) => usn.trim().toUpperCase()).filter(Boolean));
+      startingUsn = `${usnPrefix}${startingSuffix}`;
+      skippedUsns = new Set(skipUsnsInput.value.split(',')
+        .map((suffix) => suffix.trim().toUpperCase().replace(/^4MW/, ''))
+        .filter(Boolean)
+        .map((suffix) => `${usnPrefix}${suffix}`));
     }
     const formData = new FormData();
     formData.append('target_ia', selectedIA);
