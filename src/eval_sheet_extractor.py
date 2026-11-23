@@ -854,11 +854,11 @@ class EvalSheetExtractor:
         ws = wb.active
         ws.title = "IA Marks Summary"
 
-        header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+        header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
         header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-        title_font = Font(name="Segoe UI", size=14, bold=True, color="1F4E79")
-        bold_font = Font(name="Segoe UI", size=11, bold=True)
-        regular_font = Font(name="Segoe UI", size=11)
+        title_font = Font(name="Arial", size=14, bold=True, color="1F4E79")
+        bold_font = Font(name="Arial", size=11, bold=True)
+        regular_font = Font(name="Arial", size=11)
         center_align = Alignment(horizontal="center", vertical="center")
         left_align = Alignment(horizontal="left", vertical="center")
         thin_border = Border(
@@ -868,12 +868,12 @@ class EvalSheetExtractor:
             bottom=Side(style="thin", color="DDE2E5"),
         )
         total_fill = PatternFill(start_color="EDF2F7", end_color="EDF2F7", fill_type="solid")
-        total_font = Font(name="Segoe UI", size=11, bold=True, color="1A365D")
+        total_font = Font(name="Arial", size=11, bold=True, color="1A365D")
         verified_fill = PatternFill(start_color="DEF7EC", end_color="DEF7EC", fill_type="solid")
-        verified_font = Font(name="Segoe UI", size=10, bold=True, color="03543F")
+        verified_font = Font(name="Arial", size=10, bold=True, color="03543F")
         discrepancy_fill = PatternFill(start_color="FDE8E8", end_color="FDE8E8", fill_type="solid")
-        discrepancy_font = Font(name="Segoe UI", size=10, bold=True, color="9B1C1C")
-        dim_font = Font(name="Segoe UI", size=10, color="A0AEC0")
+        discrepancy_font = Font(name="Arial", size=10, bold=True, color="9B1C1C")
+        dim_font = Font(name="Arial", size=10, color="A0AEC0")
 
         sheets = extraction_data.get("sheets") if extraction_data else None
         if not sheets and extraction_data and "results_by_ia" in extraction_data:
@@ -898,7 +898,7 @@ class EvalSheetExtractor:
 
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
-            cell.font = Font(name="Segoe UI", size=10.5, bold=True, color="FFFFFF")
+            cell.font = Font(name="Arial", size=10.5, bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
             cell.alignment = left_align if col_idx == 1 else center_align
             cell.border = thin_border
@@ -1003,7 +1003,7 @@ class EvalSheetExtractor:
 
                 for col_idx in range(1, 6):
                     cell = ws_sub.cell(row=1, column=col_idx)
-                    cell.font = Font(name="Segoe UI", size=10.5, bold=True, color="FFFFFF")
+                    cell.font = Font(name="Arial", size=10.5, bold=True, color="FFFFFF")
                     cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
                     cell.alignment = center_align
                     cell.border = thin_border

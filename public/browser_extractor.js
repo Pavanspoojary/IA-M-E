@@ -2070,19 +2070,19 @@
           if (R === 0) {
             cell.s = {
               fill: { fgColor: { rgb: '1E293B' } },
-              font: { name: 'Segoe UI', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+              font: { name: 'Arial', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
               alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
               border: thinBorder,
             };
           } else {
             const isTotalCol = (C === range.e.c - 1);
             cell.s = {
-              font: { name: 'Segoe UI', sz: 10, bold: isTotalCol, color: { rgb: '1E293B' } },
+              font: { name: 'Arial', sz: 10, bold: isTotalCol, color: { rgb: '1E293B' } },
               alignment: { horizontal: C === 0 ? 'left' : 'center', vertical: 'center' },
               border: thinBorder,
             };
             if (cell.value === 'NA') {
-              cell.s.font = { name: 'Segoe UI', sz: 10, color: { rgb: '94A3B8' } };
+              cell.s.font = { name: 'Arial', sz: 10, color: { rgb: '94A3B8' } };
             }
             if (isTotalCol) {
               cell.s.fill = { fgColor: { rgb: 'F1F5F9' } };
