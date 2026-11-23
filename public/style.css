@@ -92,21 +92,6 @@ header {
   white-space: nowrap;
 }
 
-.pdf-mode-toggle {
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: #fff;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.pdf-mode-toggle.active {
-  background: var(--success-bg);
-  color: var(--success-text);
-  border-color: var(--success-border);
-}
-
 .pdf-mode-settings {
   margin: 0 0 18px;
   padding: 16px;

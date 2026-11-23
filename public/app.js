@@ -24,7 +24,6 @@
   const fileInput = document.getElementById('fileInput');
   const btnCamera = document.getElementById('btnCamera');
   const btnBrowse = document.getElementById('btnBrowse');
-  const pdfModeToggle = document.getElementById('pdfModeToggle');
   const pdfModeSettings = document.getElementById('pdfModeSettings');
   const startingUsnInput = document.getElementById('startingUsn');
   const skipUsnsInput = document.getElementById('skipUsns');
@@ -32,14 +31,6 @@
   const fileBanner = document.getElementById('fileBanner');
   const fileBannerText = document.getElementById('fileBannerText');
   const btnChangeFile = document.getElementById('btnChangeFile');
-
-  pdfModeToggle.addEventListener('click', () => {
-    pdfMode = !pdfMode;
-    pdfModeToggle.textContent = `PDF Mode: ${pdfMode ? 'On' : 'Off'}`;
-    pdfModeToggle.setAttribute('aria-pressed', String(pdfMode));
-    pdfModeToggle.classList.toggle('active', pdfMode);
-    pdfModeSettings.style.display = pdfMode ? 'block' : 'none';
-  });
 
   const iaSelectCard = document.getElementById('iaSelectCard');
   const iaButtons = document.querySelectorAll('.ia-btn');
@@ -85,6 +76,8 @@
   function setDocument(file, isDemo = false) {
     selectedFile = file;
     useDemo = isDemo;
+    pdfMode = Boolean(file && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')));
+    pdfModeSettings.style.display = pdfMode ? 'block' : 'none';
 
     if (isDemo) {
       fileBannerText.textContent = 'Loaded Demo Filled Evaluation Sheet (marks_eval_sheet_filled.jpg)';
@@ -124,6 +117,8 @@
   btnChangeFile.addEventListener('click', () => {
     selectedFile = null;
     useDemo = false;
+    pdfMode = false;
+    pdfModeSettings.style.display = 'none';
     fileBanner.style.display = 'none';
     iaSelectCard.style.display = 'none';
     resultsCard.style.display = 'none';

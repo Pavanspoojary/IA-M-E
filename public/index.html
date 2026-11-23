@@ -14,9 +14,6 @@
         <h1>IA Bluebook Marks Extraction System</h1>
         <p>Continuous Internal Assessment evaluation sheet digitization and export engine</p>
       </div>
-      <div class="header-badges">
-        <button type="button" class="pdf-mode-toggle" id="pdfModeToggle" aria-pressed="false">PDF Mode: Off</button>
-      </div>
     </header>
 
     <!-- Step 1: Ingestion Zone with 3 Options -->
@@ -38,6 +35,18 @@
         <input type="file" id="fileInput" accept="image/*,.pdf" style="display: none;">
       </div>
 
+      <!-- File Loaded Notification Banner -->
+      <div id="fileBanner" class="file-banner" style="display: none;">
+        <div class="file-banner-info" id="fileBannerText">Document loaded</div>
+        <button type="button" class="btn-outline" id="btnChangeFile" style="padding: 4px 10px; font-size: 0.8rem;">Change Document</button>
+      </div>
+    </section>
+
+    <!-- Step 2: Select IA Assessment -->
+    <section class="card" id="iaSelectCard" style="display: none;">
+      <h2>2. Select Assessment to Fetch</h2>
+      <p class="card-desc">Choose which IA column OpenCV will crop from the evaluation sheet and digitize:</p>
+
       <div class="pdf-mode-settings" id="pdfModeSettings" style="display: none;">
         <h3>PDF sequence settings</h3>
         <p>The 4MW prefix is added automatically. Assign USNs to PDF pages in order and list any suffixes to skip.</p>
@@ -50,18 +59,6 @@
           </label>
         </div>
       </div>
-
-      <!-- File Loaded Notification Banner -->
-      <div id="fileBanner" class="file-banner" style="display: none;">
-        <div class="file-banner-info" id="fileBannerText">Document loaded</div>
-        <button type="button" class="btn-outline" id="btnChangeFile" style="padding: 4px 10px; font-size: 0.8rem;">Change Document</button>
-      </div>
-    </section>
-
-    <!-- Step 2: Select IA Assessment -->
-    <section class="card" id="iaSelectCard" style="display: none;">
-      <h2>2. Select Assessment to Fetch</h2>
-      <p class="card-desc">Choose which IA column OpenCV will crop from the evaluation sheet and digitize:</p>
 
       <div class="ia-selector-group">
         <button type="button" class="ia-btn active" data-ia="IA 1">IA 1</button>
