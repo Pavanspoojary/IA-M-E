@@ -1,261 +1,167 @@
-# IA Bluebook Marks Extraction System (ONNX CPU Engine)
+# IA Bluebook Marks Extraction System
 
-A deterministic, privacy-first computer vision and local machine-learning web application for college examination cells. Automatically extracts handwritten, question-wise marks from the second sheet of Continuous Internal Assessment (IA) examination bluebooks and exports verified records into multi-worksheet Excel (`.xlsx`) workbooks.
+A web application for reading handwritten marks from Continuous Internal Assessment (IA) evaluation sheets. Upload a photo or a PDF, choose which IA columns to read, review and correct the detected marks, then download the result as an Excel workbook or CSV file.
 
----
+The main interface is a static HTML, CSS, and JavaScript app in [`public/`](public/). Its primary extraction engine runs in the browser using OpenCV.js and an ONNX digit-recognition model. When run locally with FastAPI, the app can also fall back to the Python extraction endpoint if browser extraction fails.
 
-## 1. System Architecture & Model Design
+## Contents
 
-The system runs 100% locally on the host machine without external network calls, cloud AI services, or remote inference APIs.
+- [What you need](#what-you-need)
+- [Run locally](#run-locally)
+- [Using the app](#using-the-app)
+- [How extraction works](#how-extraction-works)
+- [Excel and CSV output](#excel-and-csv-output)
+- [Technology](#technology)
+- [Project layout](#project-layout)
+- [Known limits](#known-limits)
 
-### Architecture Overview
+## What you need
 
-```
-[Uploaded Documents: JPG / PNG / PDF]
-                  |
-                  v
-    [PyMuPDF Page Rendering]
-    - Scanned PDF second sheet extraction (150-300 DPI)
-                  |
-                  v
-    [10-Stage OpenCV Preprocessing]
-    - Orientation validation (Portrait standard)
-    - 4-point perspective warp & boundary detection
-    - Normalized resolution scaling (1240 x 1754)
-    - Median / Gaussian denoising
-    - Hough line rotational deskewing (+/- 15 deg)
-    - Adaptive / Otsu binarization
-                  |
-                  v
-    [Region Extractor & Border Stripping]
-    - Normalized coordinate scaling
-    - Morphological table grid line removal
-                  |
-                  v
-    [Marks-Field Pipeline & ONNX CPU Inference]
-    - Non-zero density blank detection (<0.35% ink -> Blank)
-    - Connected component segmentation
-    - Vertical projection profile splitting for touching multi-digits
-    - Resizing to 20x20 centered inside 28x28 float32 tensor [N, 1, 28, 28]
-    - ONNX Runtime local inference (strictly 'CPUExecutionProvider')
-    - Softmax probability scoring and candidate margin analysis
-                  |
-                  v
-    [Deterministic Validation & Grading Rules]
-    - Maximum marks check [0 <= mark <= max_marks]
-    - Allowed increment check (e.g. 0.5 or 1.0 step)
-    - Ambiguity gating (low confidence or narrow margin -> Needs review)
-    - Duplicate student and assessment record detection
-                  |
-                  v
-    [Review Interface & Manual Overrides]
-    - Streamlit review table with original handwriting crops
-    - Record-to-record navigation
-    - Real-time total recalculation
-                  |
-                  v
-    [openpyxl Excel Export]
-    - Worksheet 1: Marks Summary (with dynamic Excel SUM formulas)
-    - Worksheet 2: Detailed Extraction (status color fills & model tag)
-    - Worksheet 3: Processing Log (audit trail & diagnostics)
-```
+- Python 3.10 or later for the local FastAPI server.
+- A modern browser with JavaScript and WebAssembly enabled.
+- Internet access when opening the web app so the browser can load its JavaScript libraries from their CDNs. The ONNX model is served from this project.
 
----
+## Run locally
 
-## 2. Directory Structure
+Create and activate a virtual environment, then install the project dependencies:
 
-```
-ia_bluebook_extractor/
-|-- server.py                       # High-performance FastAPI REST server
-|-- web/                            # Minimal Single-Page Application (HTML5 / Vanilla JS / CSS)
-|   |-- index.html                  # Minimal responsive interface
-|   |-- style.css                   # Modern CSS styling (Zero emojis)
-|   `-- app.js                      # Client-side reactivity & API controller
-|-- app.py                          # Alternative Streamlit web dashboard
-|-- requirements.txt                # Production dependencies
-|-- README.md                       # Comprehensive system documentation
-|-- pytest.ini                      # Pytest configuration
-|-- config/
-|   `-- template.json               # Default 8-question IA grid template
-|-- models/
-|   |-- README.md                   # Model specifications and input/output schema
-|   `-- digit_model.onnx            # 427 KB compact CNN running on CPUExecutionProvider
-|-- scripts/
-|   |-- train_digit_model.py        # Dataset synthesis and model training script
-|   |-- export_onnx.py              # Model serialization utility
-|   `-- verify_model.py             # ONNX Runtime CPU verification & benchmark script
-|-- src/
-|   |-- __init__.py
-|   |-- file_loader.py              # File loader for JPG, PNG, and PDF formats
-|   |-- pdf_processor.py            # PyMuPDF rendering engine
-|   |-- image_preprocessor.py       # 10-stage classical CV pipeline & deskewing
-|   |-- template_manager.py         # Coordinate scaling & JSON schema manager
-|   |-- region_extractor.py         # Cell cropping & morphological line stripping
-|   |-- digit_recognizer.py         # ONNX Runtime CPU inference & digit segmentation
-|   |-- marks_validator.py          # Deterministic grading rules & audit statuses
-|   |-- review_manager.py           # Batch lifecycle, duplicates, & manual overrides
-|   |-- excel_exporter.py           # Multi-sheet openpyxl Excel generator
-|   `-- processing_pipeline.py      # End-to-end orchestrator with failure recovery
-|-- tests/
-|   |-- test_preprocessing.py       # Preprocessing, skew, and resolution tests
-|   |-- test_validation.py          # Validation rules, increments, and totals
-|   |-- test_recognition.py         # ONNX model, tensor shapes, and digit tests
-|   |-- test_excel_export.py        # openpyxl workbook structure & formulas
-|   |-- test_server_api.py          # FastAPI web endpoints & batch review tests
-|   |-- test_end_to_end.py          # Complete pipeline integration tests
-|   `-- benchmark_recognition.py    # Empirical accuracy evaluation on held-out data
-`-- sample_data/
-    |-- README.md                   # Sample dataset documentation
-    |-- generate_samples.py         # Synthetic bluebook generator script
-    |-- clean_bluebook_template.png # Blank reference sheet
-    |-- student_sample_1.png        # Standard evaluated bluebook
-    |-- student_sample_2_skewed.jpg # Bluebook with +3.8 degree skew
-    |-- student_sample_3_perspective.png # Camera perspective distortion
-    |-- student_sample_4_multipage.pdf   # Scanned 2-page assessment booklet
-    `-- student_sample_5_review_needed.png # Invalid marks (>10) & blank fields
-```
-
----
-
-## 3. Installation and Setup
-
-### Prerequisites
-- Python 3.10, 3.11, or 3.12 installed on Windows, macOS, or Linux.
-
-### Step 1: Create Virtual Environment
-
-On Windows (Command Prompt / PowerShell):
-```cmd
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-On macOS / Linux (Terminal):
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-### Step 2: Install Dependencies
-
-```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
-### Step 3: Verify Model & CPU Execution Provider
-
-Verify that the local ONNX model loads with the CPU provider and inspect latency benchmarks:
+Start the FastAPI app:
 
 ```bash
-python scripts/verify_model.py
+uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
-Expected output:
+Open [http://localhost:8000](http://localhost:8000). The root page and assets are served from `public/`. The local server also exposes extraction and export fallback endpoints.
+
+The static web app is also configured for Vercel: static assets are served from `public/`, with the lightweight API entry point in [`api/index.py`](api/index.py).
+
+## Using the app
+
+### 1. Upload or capture an evaluation sheet
+
+Choose **Take Photo**, **Upload File**, or drag a file onto the upload area. Supported documents are JPG/JPEG, PNG, and PDF. The app processes one uploaded document at a time. A PDF may contain multiple evaluation sheets, one per page.
+
+### 2. Set PDF sequence details, when applicable
+
+When the selected file is a PDF, the **PDF sequence settings** appear automatically beside the IA selector. They do not appear for image uploads.
+
+- The `4MW` prefix is fixed and added by the app.
+- **Starting USN** contains the remaining suffix and defaults to `24AD001`. For example, the first assigned USN is `4MW24AD001`.
+- **Skip USN suffixes** is optional. Enter comma-separated suffixes such as `24AD004, 24AD009`. The app skips those full USNs while assigning IDs to pages.
+- USNs are assigned in PDF page order. Each page gets the next available USN.
+
+### 3. Choose which assessment to fetch
+
+Select **IA 1**, **IA 2**, **IA 3**, or **All IA**, then click **Fetch Marks & Crop Column**. The app processes each page and creates a separate result sheet for it.
+
+### 4. Review detections and correct marks
+
+The results view shows the selected column crop and the extracted marks for the active page. For each question it shows:
+
+- The question label and handwriting crop. Click a handwriting crop to inspect it larger.
+- The detected mark and recognition confidence, when available.
+- A status such as **Valid**, **Needs Review**, or **NA**.
+- An editable **Verified Mark** field.
+
+Use the page selector or Previous/Next controls to review other PDF pages. Edit any incorrect value in **Verified Mark**; the calculated total updates as you edit. The app compares the calculated question sum with the handwritten total when it can read one. A mismatch is shown for review; the written total is not used to silently change question marks.
+
+### 5. Download the results
+
+Choose **Download Excel (.xlsx)** or **Download CSV (.csv)**. The export includes the verified values currently shown in the results table.
+
+## How extraction works
+
+The browser engine is implemented in [`public/browser_extractor.js`](public/browser_extractor.js) and controlled by [`public/app.js`](public/app.js).
+
+1. **Load the document.** An image is decoded into a browser canvas. PDF.js renders every PDF page in order at 2× scale.
+2. **Correct and locate the table.** OpenCV.js rectifies perspective and detects the table grid and IA columns. A pure JavaScript rectification fallback is available if OpenCV.js is unavailable.
+3. **Crop the selected IA.** The engine locates question rows and crops the relevant marks column. For **All IA**, it processes IA 1, IA 2, and IA 3 separately.
+4. **Isolate handwriting.** Image processing separates likely pen ink from printed grid lines, detects blank or crossed-out cells, and segments digit strokes.
+5. **Recognize digits.** The ONNX model classifies normalized 28×28 digit images in ONNX Runtime Web using WebAssembly. Small shifted versions of each crop are also classified to reduce sensitivity to alignment.
+6. **Validate and display.** Marks are checked against the configured cell range. Low-confidence or out-of-range results are marked for review. Blank or crossed-out cells appear as `NA`.
+7. **Assign PDF USNs.** After page extraction, the app assigns the configured USN suffixes in page order, applying the fixed `4MW` prefix and skipping IDs supplied in the PDF settings.
+
+The browser performs the normal extraction and export without sending the document to an inference API. The frontend libraries (OpenCV.js, PDF.js, ONNX Runtime Web, and SheetJS) are loaded from CDNs. If browser extraction fails while the app is being served by the local FastAPI server, the frontend attempts the local `/api/extract-sheet` endpoint as a fallback.
+
+## Excel and CSV output
+
+Both formats contain one row per selected IA per page, with question marks, total, and status. PDF exports use a `USN` column; image exports use a `Sheet` column. Column names follow the detected sheet layout.
+
+### Excel (`.xlsx`)
+
+- Uses Arial text and a formatted header row.
+- For a PDF page where all three IAs were fetched, the USN cell is merged vertically across its IA 1, IA 2, and IA 3 rows and centered vertically. This merge is only applied in Excel exports.
+- Single-IA exports and image uploads keep one identifier cell per row.
+
+### CSV (`.csv`)
+
+- Uses the same fields as the Excel summary, in plain comma-separated rows.
+- Does not merge cells. With **All IA**, the USN is repeated on each IA row so every CSV row remains self-contained.
+- Text fields are quoted when needed to preserve commas, quotes, or line breaks.
+
+The filename includes the selected assessment, for example `IA_Marks_Evaluation_IA_1.xlsx` or `IA_Marks_Evaluation_All_IA.csv`.
+
+## Technology
+
+| Area | Implementation |
+| --- | --- |
+| User interface | HTML, CSS, and vanilla JavaScript in `public/` |
+| Image processing and table detection | OpenCV.js, with JavaScript fallback routines |
+| PDF page rendering | PDF.js |
+| Handwritten digit inference | ONNX Runtime Web (WebAssembly) and `public/models/digit_model.onnx` |
+| Excel generation in the browser | `xlsx-js-style` / SheetJS |
+| Local API and extraction fallback | FastAPI, OpenCV-Python, PyMuPDF, and ONNX Runtime in `server.py` |
+| Python Excel/CSV fallback | `openpyxl` and Python CSV utilities in `src/eval_sheet_extractor.py` |
+
+The project also contains a separate Streamlit dashboard in [`app.py`](app.py), along with Python processing modules for preprocessing, recognition, validation, review, and workbook generation. The step-by-step workflow above describes the main `public/` web app.
+
+## Project layout
+
+```text
+public/
+  index.html             Web app interface
+  app.js                 Upload, review, IA selection, and download flow
+  browser_extractor.js   Browser image/PDF processing and export code
+  models/digit_model.onnx Handwritten digit model used in the browser
+src/
+  eval_sheet_extractor.py Python extraction and export fallback
+  pdf_processor.py       Python PDF rendering utilities
+  image_preprocessor.py  Image cleanup and normalization
+  digit_recognizer.py    Python ONNX digit recognizer
+  marks_validator.py     Python-side mark validation
+server.py                Local FastAPI app and fallback endpoints
+api/index.py             Vercel API entry point
+app.py                   Separate Streamlit dashboard
+config/template.json     Python pipeline sheet template
+sample_data/             Example evaluation sheets and PDFs
+tests/                   Python tests and recognition benchmark
 ```
-Active Execution Providers: ['CPUExecutionProvider']
-Input: name='input', shape=['batch', 1, 28, 28], type=tensor(float)
-Output: name='output', shape=['batch', 10], type=tensor(float)
-Benchmark over 100 iterations: Mean = 0.007 ms, P95 = 0.009 ms
-[PASS] Model verified successfully with ONNX Runtime CPU Provider.
-```
 
----
+## Known limits
 
-## 4. Running the Web Application
+- Recognition quality depends on the scan or photo: keep the full table in frame, use good lighting, and avoid blur, glare, heavy skew, and cut-off marks.
+- The browser grid detector is designed for the evaluation sheet layouts represented by this project. Different printed layouts may need changes to the grid detection and row/column definitions in `public/browser_extractor.js`.
+- Handwriting that touches printed lines, has overlapping digits, or is faint can be misread. Review the handwriting crop and correct the verified mark before exporting.
+- The browser classifier recognizes digits; it does not read student names or USNs from the handwritten sheet. In PDF sequence mode, USNs are assigned from page order using the starting and skipped suffixes you provide.
+- The browser needs access to the configured CDN URLs to load its processing libraries. When deployed without those libraries, the static Vercel API endpoints do not provide server-side inference; the local FastAPI server provides the Python fallback.
 
-### Option A: Minimal Web App (FastAPI + Vanilla JS) - Recommended
+## Development checks
 
-Launch the high-performance local web server:
+Install `requirements-dev.txt`, then run the existing Python test suite with:
 
-```bash
-uvicorn server:app --host 0.0.0.0 --port 8000
-```
-
-Open your browser at:
-`http://localhost:8000`
-
-Key advantages of the minimal web app:
-- Zero external frontend frameworks or bulky node_modules.
-- Blazing-fast page loads (< 10 ms).
-- Instant client-side input editing and verification without script re-runs.
-- Strict zero-emoji clean professional UI with high-contrast badge indicators.
-
-### Option B: Streamlit Dashboard
-
-Alternatively, run the multi-step Streamlit interface:
-
-```bash
-streamlit run app.py
-```
-
-The application opens at:
-`http://localhost:8501`
-
----
-
-## 5. Walkthrough: Testing with Sample Images
-
-1. **Dashboard**: Check that the local model status displays `ONNX Model Active (CPU)`.
-2. **Upload Bluebooks**:
-   - Choose `IA Test - 1` and subject `Operating Systems (21CS42)`.
-   - Upload any sample from `sample_data/` (e.g. `student_sample_1.png`, `student_sample_2_skewed.jpg`, `student_sample_4_multipage.pdf`).
-   - Click **Prepare Batch**.
-3. **Template Configuration**:
-   - Inspect the visual bounding boxes overlaid on the reference sheet.
-   - Question marks regions and Student ID box coordinates can be adjusted if using custom college formats.
-4. **Image Preprocessing & Crop Preview**:
-   - Inspect the side-by-side view: original vs deskewed/binarized sheet.
-   - Inspect the clean individual question crops with printed borders stripped.
-5. **Batch Recognition**:
-   - Click **Execute Batch Recognition**.
-   - Progress bar tracks document processing with isolated failure protection.
-6. **Marks Verification**:
-   - Inspect the detected values alongside the high-resolution handwriting snippets.
-   - Navigate between students using `< Previous Record` and `Next Record >`.
-   - Edit any candidate mark directly; totals update in real-time.
-7. **Excel Export**:
-   - Review the summary ledger.
-   - Click **Download Formatted Excel Workbook (.xlsx)**.
-
----
-
-## 6. Retraining and Customizing the ONNX Model
-
-To train the compact classifier on new digit styles or actual bluebook digit crops:
-
-```bash
-python scripts/train_digit_model.py
-```
-
-This generates an augmented dataset across diverse fonts, thicknesses, and affine rotations, trains the neural network weights, and exports `models/digit_model.onnx` ready for ONNX Runtime.
-
----
-
-## 7. Automated Test Suite and Recognition Benchmark
-
-### Run Automated Unit Tests (30 Tests)
 ```bash
 pytest -v
 ```
 
-### Run Held-Out Test Set Benchmark
+Run the recognition benchmark with:
+
 ```bash
 python tests/benchmark_recognition.py
 ```
-
-Benchmark performance on the held-out test set:
-- Total marks fields evaluated: `32`
-- Correctly resolved pre-correction: `32 (100.0%)`
-- Correctly caught invalid marks: `1 (100%)`
-- Correctly caught blank cells: `1 (100%)`
-- Unflagged errors (false accepts): `0 (0.0%)`
-- Average CPU inference latency per digit: `< 0.01 ms`
-
----
-
-## 8. Remaining Limitations and Real-World Considerations
-
-1. **Heavily Touching Multi-Digits**: If two digits are drawn with overlapping loops or connecting ligatures, projection profile valley splitting may flag the cell as ambiguous. The system holds the cell for human evaluator verification rather than guessing.
-2. **Non-Standard Table Layouts**: The template system assumes a consistent printed layout across an institution's examination booklets. When deploying at a college with a different booklet format, recalibrate coordinates once in Section 3 and save the resulting `template.json`.
-3. **Ink Bleed & Extreme Smudging**: Heavy reverse-side ink bleed or excessive erasing should be reviewed manually in the verification interface using the original cell crop.
