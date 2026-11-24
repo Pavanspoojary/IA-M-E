@@ -908,6 +908,7 @@ class EvalSheetExtractor:
             sheet_label = sheet.get("sheet_label") or f"Sheet {sheet.get('sheet_index', 1)}"
             res_by_ia = sheet.get("results_by_ia", {})
             sorted_ia_names = sorted(res_by_ia.keys(), key=lambda k: ["IA 1", "IA 2", "IA 3"].index(k) if k in ["IA 1", "IA 2", "IA 3"] else 99)
+            first_ia_row = current_row
             for ia_name in sorted_ia_names:
                 marks = res_by_ia[ia_name]
                 m_map = {}
@@ -987,6 +988,20 @@ class EvalSheetExtractor:
                         cell.font = regular_font
 
                 current_row += 1
+
+            if pdf_mode and {"IA 1", "IA 2", "IA 3"}.issubset(res_by_ia) and current_row - first_ia_row > 1:
+                last_ia_row = current_row - 1
+                ws.merge_cells(start_row=first_ia_row, end_row=last_ia_row, start_column=1, end_column=1)
+                border_side = Side(style="thin", color="DDE2E5")
+                for row_idx in range(first_ia_row, last_ia_row + 1):
+                    cell = ws.cell(row=row_idx, column=1)
+                    cell.border = Border(
+                        left=border_side,
+                        right=border_side,
+                        top=border_side if row_idx == first_ia_row else Side(style=None),
+                        bottom=border_side if row_idx == last_ia_row else Side(style=None),
+                    )
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
 
         for idx, width in enumerate(col_widths, start=1):
             col_letter = openpyxl.utils.get_column_letter(idx)

@@ -1899,6 +1899,7 @@
 
       const sortedSheets = [...sheets].sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0));
       const canonicalOrder = ['IA 1', 'IA 2', 'IA 3'];
+      const usnMergeRanges = [];
 
       // Row 1: Clean Minimal Table Headers
       const headerRow = extractionData.pdf_mode
@@ -1909,6 +1910,7 @@
       sortedSheets.forEach((s) => {
         const sLabel = s.sheet_label || ('Sheet ' + (s.sheet_index || 1));
         const resultsByIA = s.results_by_ia || {};
+        const firstDataRow = dataRows.length;
 
         const iaKeys = Object.keys(resultsByIA).sort((a, b) => {
           const idxA = canonicalOrder.indexOf(a);
@@ -1974,6 +1976,14 @@
 
           dataRows.push(row);
         });
+
+        const hasAllIAs = canonicalOrder.every((ia) => Object.prototype.hasOwnProperty.call(resultsByIA, ia));
+        if (extractionData.pdf_mode && hasAllIAs && dataRows.length - firstDataRow > 1) {
+          usnMergeRanges.push({
+            s: { r: firstDataRow, c: 0 },
+            e: { r: dataRows.length - 1, c: 0 },
+          });
+        }
       });
 
       const ws = XLSX.utils.aoa_to_sheet(dataRows);
@@ -2027,6 +2037,28 @@
             }
           }
         }
+      }
+
+      if (usnMergeRanges.length) {
+        ws['!merges'] = usnMergeRanges;
+        usnMergeRanges.forEach((merge) => {
+          for (let R = merge.s.r; R <= merge.e.r; R++) {
+            const cellRef = XLSX.utils.encode_cell({ r: R, c: merge.s.c });
+            const cell = ws[cellRef];
+            const existingStyle = cell.s || {};
+            const outerBorder = {
+              left: thinBorder.left,
+              right: thinBorder.right,
+            };
+            if (R === merge.s.r) outerBorder.top = thinBorder.top;
+            if (R === merge.e.r) outerBorder.bottom = thinBorder.bottom;
+            cell.s = {
+              ...existingStyle,
+              alignment: { horizontal: 'left', vertical: 'center' },
+              border: outerBorder,
+            };
+          }
+        });
       }
 
       XLSX.utils.book_append_sheet(wb, ws, 'IA Marks Summary');
