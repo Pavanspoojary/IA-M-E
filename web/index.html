@@ -82,8 +82,22 @@
       <div class="results-grid">
         <!-- Left: Cropped Column View -->
         <div class="crop-preview-card">
-          <h3 id="cropColumnTitle">Cropped Column</h3>
-          <img id="columnCropImg" class="column-crop-img" alt="Cropped IA Column">
+          <div class="crop-card-header">
+            <h3 id="cropColumnTitle">Cropped Column</h3>
+            <button type="button" class="btn-crop-zoom" id="btnZoomColumn" title="Enlarge column view">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                <line x1="11" y1="8" x2="11" y2="14"></line>
+                <line x1="8" y1="11" x2="14" y2="11"></line>
+              </svg>
+              Enlarge
+            </button>
+          </div>
+          <div class="crop-image-wrapper">
+            <img id="columnCropImg" class="column-crop-img" alt="Cropped IA Column" title="Click to enlarge full resolution">
+          </div>
+          <div class="crop-zoom-hint">Click image or Enlarge for high-resolution view</div>
         </div>
 
         <!-- Right: Extracted Marks Table & Live Totals -->
@@ -136,6 +150,22 @@
         </div>
         <p id="modalDetails" style="font-size: 0.92rem; color: #475569; margin-bottom: 20px;"></p>
         <button type="button" class="btn-primary" id="btnModalClose" style="width: 100%; padding: 10px 0;">Close Inspection</button>
+      </div>
+    </div>
+
+    <!-- Full-Size Column Magnifier Modal -->
+    <div id="columnModal" class="column-modal" style="display: none;" aria-hidden="true">
+      <div class="column-modal-dialog">
+        <div class="column-modal-header">
+          <h3 id="columnModalTitle">Cropped Column Inspection</h3>
+          <button type="button" class="btn-modal-close-icon" id="btnColumnModalClose" aria-label="Close inspection">&times;</button>
+        </div>
+        <div class="column-modal-body">
+          <img id="columnModalImg" src="" alt="Enlarged Column View">
+        </div>
+        <div class="column-modal-footer">
+          <button type="button" class="btn-primary" id="btnColumnModalCloseBtn">Close Inspection</button>
+        </div>
       </div>
     </div>
   </div>

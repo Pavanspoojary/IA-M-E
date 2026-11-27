@@ -65,6 +65,40 @@
   const modalDetails = document.getElementById('modalDetails');
   const btnModalClose = document.getElementById('btnModalClose');
 
+  const columnModal = document.getElementById('columnModal');
+  const columnModalTitle = document.getElementById('columnModalTitle');
+  const columnModalImg = document.getElementById('columnModalImg');
+  const btnZoomColumn = document.getElementById('btnZoomColumn');
+  const btnColumnModalClose = document.getElementById('btnColumnModalClose');
+  const btnColumnModalCloseBtn = document.getElementById('btnColumnModalCloseBtn');
+
+  function openColumnModal() {
+    if (!columnCropImg || !columnCropImg.src) return;
+    if (columnModalImg) columnModalImg.src = columnCropImg.src;
+    if (columnModalTitle && cropColumnTitle) columnModalTitle.textContent = cropColumnTitle.textContent;
+    if (columnModal) {
+      columnModal.style.display = 'flex';
+      columnModal.setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function closeColumnModal() {
+    if (columnModal) {
+      columnModal.style.display = 'none';
+      columnModal.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  if (columnCropImg) columnCropImg.addEventListener('click', openColumnModal);
+  if (btnZoomColumn) btnZoomColumn.addEventListener('click', openColumnModal);
+  if (btnColumnModalClose) btnColumnModalClose.addEventListener('click', closeColumnModal);
+  if (btnColumnModalCloseBtn) btnColumnModalCloseBtn.addEventListener('click', closeColumnModal);
+  if (columnModal) {
+    columnModal.addEventListener('click', (e) => {
+      if (e.target === columnModal) closeColumnModal();
+    });
+  }
+
   if (btnModalClose) {
     btnModalClose.addEventListener('click', () => {
       if (snippetModal) snippetModal.style.display = 'none';
@@ -75,6 +109,13 @@
       if (e.target === snippetModal) snippetModal.style.display = 'none';
     });
   }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (columnModal && columnModal.style.display !== 'none') closeColumnModal();
+      if (snippetModal && snippetModal.style.display !== 'none') snippetModal.style.display = 'none';
+    }
+  });
 
   // Handle Document Selected
   function setDocument(file, isDemo = false) {
