@@ -1574,15 +1574,25 @@
       }
 
       // Create Overview Column Crop
-      let overviewCanvas;
+      let rawCrop;
       if (grid.isSingleColumn) {
-        overviewCanvas = this.cropCanvas(rectified, 0, 0, rectified.width, rectified.height);
+        rawCrop = this.cropCanvas(rectified, 0, 0, rectified.width, rectified.height);
       } else if (selectedIAs.length === 1) {
         const range = activeCols[selectedIAs[0]].colRange;
-        overviewCanvas = this.cropCanvas(rectified, range[0], 0, range[1] - range[0], 715);
+        rawCrop = this.cropCanvas(rectified, range[0], 0, range[1] - range[0], 715);
       } else {
-        overviewCanvas = this.cropCanvas(rectified, 0, 0, 600, 715);
+        rawCrop = this.cropCanvas(rectified, 0, 0, 600, 715);
       }
+
+      // Upscale 2x with high-quality smoothing for high-DPI inspection
+      const scaleFactor = 2;
+      const overviewCanvas = document.createElement('canvas');
+      overviewCanvas.width = rawCrop.width * scaleFactor;
+      overviewCanvas.height = rawCrop.height * scaleFactor;
+      const oCtx = overviewCanvas.getContext('2d');
+      oCtx.imageSmoothingEnabled = true;
+      oCtx.imageSmoothingQuality = 'high';
+      oCtx.drawImage(rawCrop, 0, 0, overviewCanvas.width, overviewCanvas.height);
       const overviewBase64 = overviewCanvas.toDataURL('image/png');
 
       const resultsByIA = {};

@@ -276,7 +276,12 @@ class EvalSheetExtractor:
             overview_crop = warped_table[0:715, col_x1:col_x2]
         else:
             overview_crop = warped_table[0:715, 0:600]
-        overview_b64 = self._encode_base64(overview_crop)
+
+        if overview_crop.shape[0] > 0 and overview_crop.shape[1] > 0:
+            overview_crop_2x = cv2.resize(overview_crop, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_LANCZOS4)
+            overview_b64 = self._encode_base64(overview_crop_2x)
+        else:
+            overview_b64 = self._encode_base64(overview_crop)
 
         results_by_ia: Dict[str, List[Dict[str, Any]]] = {}
         kernel_2x2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
@@ -580,6 +585,8 @@ class EvalSheetExtractor:
             crop_y2 = min(img_bgr.shape[0], max_by + 20)
 
             overview_crop = img_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+            if overview_crop.shape[0] > 0 and overview_crop.shape[1] > 0:
+                overview_crop = cv2.resize(overview_crop, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_LANCZOS4)
             overview_b64 = self._encode_base64(overview_crop)
 
             labels_map = [r[1] for r in self.ROWS]
@@ -674,6 +681,8 @@ class EvalSheetExtractor:
                 info = self.COLUMNS[selected_ias[0]]
                 overview_crop = img_resized[info["crop_y"]:info["crop_y"] + info["crop_h"], info["crop_x"]:info["crop_x"] + info["crop_w"]]
 
+            if overview_crop.shape[0] > 0 and overview_crop.shape[1] > 0:
+                overview_crop = cv2.resize(overview_crop, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_LANCZOS4)
             overview_b64 = self._encode_base64(overview_crop)
 
             for ia_name in selected_ias:
